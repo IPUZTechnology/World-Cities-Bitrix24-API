@@ -167,7 +167,10 @@ async function handleRequest(request, event) {
 
       const status = fdPeek ? String(fdPeek.get('status') || '').trim().toUpperCase() : '';
       console.log('POST_DEBUG', JSON.stringify({ placement, domain, authToken: authToken.substring(0,10), status, allKeys: fdPeek ? [...fdPeek.keys()] : [] }));
-      const isInstall = authToken && authToken.length > 10 && (status === 'F' || status === 'L');
+      // Install real: status F/L + NO tiene DOMAIN en querystring
+      // LEFT_MENU: fue registrado con ?DOMAIN= en la URL, así que sí tiene DOMAIN en QS
+      const hasDomainInQS = !!url.searchParams.get('DOMAIN');
+      const isInstall = authToken && authToken.length > 10 && (status === 'F' || status === 'L') && !hasDomainInQS;
 
       // Instalación real
       if (isInstall) return handleInstall(request, event, url, corsHeaders, fdPeek);
