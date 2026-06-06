@@ -70,6 +70,19 @@ async function handleRequest(request, event) {
       return handleInstall(request, event, url, corsHeaders, fdPeek);
     }
 
+    // GET con DOMAIN → LEFT_MENU o app abierta → settings
+    const getDomain = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
+    if (getDomain) {
+      let fieldCfg = { destinos: '', pais: '', region: '' };
+      if (typeof TENANT_CONFIG !== 'undefined') {
+        const raw = await TENANT_CONFIG.get('fields:' + getDomain).catch(() => null);
+        if (raw) { try { fieldCfg = JSON.parse(raw); } catch(e) {} }
+      }
+      return new Response(renderSettingsPage(fieldCfg, getDomain), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
+      });
+    }
     return new Response(renderWelcomePage(), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
