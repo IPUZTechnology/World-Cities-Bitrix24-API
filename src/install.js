@@ -459,8 +459,10 @@ function renderWidget(fieldCfg, domain, placement) {
     '  var entity=PLACEMENT.indexOf("LEAD")>=0?"crm.lead":"crm.deal";' +
     '  var fields={};' +
     '  fields[FIELD_DESTINOS]=ciudades;' +
-    '  fields[FIELD_PAIS]=selected.map(function(s){return s.pais;});' +
-    '  fields[FIELD_REGION]=selected.map(function(s){return s.region;});' +
+    '  var paisesUniq=selected.map(function(s){return s.pais;}).filter(function(v,i,a){return a.indexOf(v)===i;});' +
+    '  var regionesUniq=selected.map(function(s){return s.region;}).filter(function(v,i,a){return a.indexOf(v)===i;});' +
+    '  fields[FIELD_PAIS]=paisesUniq;' +
+    '  fields[FIELD_REGION]=regionesUniq;' +
     '  BX24.callMethod(entity+".update",{id:ENTITY_ID,fields:fields},function(result){' +
     '    if(result.error()){' +
     '      setStatus("Error: "+result.error(),"err");' +
