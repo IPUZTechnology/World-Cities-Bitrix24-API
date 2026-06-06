@@ -26,10 +26,35 @@ async function handleRequest(request, event) {
     return fetch(CITIES_URL);
   }
 
-  // ── INSTALL HANDLER ─────────────────────────────────────
-  // Bitrix24 llama este endpoint con POST durante instalacion
+  // ── INSTALL / WIDGET HANDLER ────────────────────────────
   if (path === '/install' || path === '' || path === '/') {
     if (request.method === 'POST') {
+      // Leer formData para detectar si es placement o instalacion
+      const fdPeek = await request.clone().formData().catch(() => null);
+      const placement = fdPeek ? String(fdPeek.get('PLACEMENT') || fdPeek.get('placement') || '').trim() : '';
+      
+      // Si viene PLACEMENT → es el widget cargando en el Deal
+      if (placement && (placement.includes('DEAL') || placement.includes('LEAD'))) {
+        const domain = String(
+          fdPeek.get('DOMAIN') || fdPeek.get('domain') ||
+          url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || ''
+        ).trim().toLowerCase();
+        const entityId = String(
+          fdPeek.get('PLACEMENT_OPTIONS') ? 
+          JSON.parse(fdPeek.get('PLACEMENT_OPTIONS') || '{}').ID || '' : ''
+        ).trim();
+        let fieldCfg = { destinos: '', pais: '', region: '' };
+        if (TENANT_CONFIG && domain) {
+          const raw = await TENANT_CONFIG.get('fields:' + domain).catch(() => null);
+          if (raw) { try { fieldCfg = JSON.parse(raw); } catch(e) {} }
+        }
+        return new Response(renderWidget(fieldCfg, domain, placement), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
+        });
+      }
+      
+      // Si no viene PLACEMENT → es instalacion real
       return handleInstall(request, event, url, corsHeaders);
     }
     // GET → servir pagina de bienvenida
@@ -218,7 +243,8 @@ function renderWelcomePage() {
     '</body></html>';
 }
 
-function renderWidget(fieldCfg, domain) {
+function renderWidget(fieldCfg, domain, placement) {
+  placement = placement || '';
   const WORKER_URL = 'https://world-cities-bitrix24.ripuz.workers.dev';
 
   return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
@@ -266,6 +292,7 @@ function renderWidget(fieldCfg, domain) {
     'var FIELD_PAIS = "' + fieldCfg.pais + '";' +
     'var FIELD_REGION = "' + fieldCfg.region + '";' +
     'var DOMAIN = "' + domain + '";' +
+    'var INIT_PLACEMENT = "' + (placement||'') + '";' +
     'var allCities=[], selected=[], dropIndex=-1, ENTITY_ID="", PLACEMENT="";' +
 
     'BX24.init(function() {' +
