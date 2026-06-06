@@ -91,63 +91,6 @@ async function handleRequest(request, event) {
     }
   }
 
-    try {
-      // Intentar primero crm.userfield.list via GET
-      const r1 = await fetch(
-        restBase + 'crm.userfield.list.json?auth=' + encodeURIComponent(accessToken) +
-        '&ENTITY_ID=CRM_DEAL&order[FIELD_NAME]=ASC',
-        { method: 'GET' }
-      );
-      const d1 = await r1.json();
-      const items = d1?.result || [];
-
-      if (items.length) {
-        const fields = items.map(f => {
-          const lbl = f.EDIT_FORM_LABEL || f.LIST_COLUMN_LABEL || {};
-          const label = typeof lbl === 'object'
-            ? (lbl['es'] || lbl['en'] || lbl[Object.keys(lbl)[0]] || f.FIELD_NAME)
-            : String(lbl || f.FIELD_NAME);
-          return { id: f.FIELD_NAME, label: label.trim() || f.FIELD_NAME };
-        }).sort((a, b) => a.label.localeCompare(b.label));
-        return new Response(JSON.stringify({ ok: true, fields }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      }
-
-      // Fallback: crm.deal.fields
-      const r2 = await fetch(restBase + 'crm.deal.fields.json?auth=' + encodeURIComponent(accessToken), {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
-      });
-      const d2 = await r2.json();
-      const rawFields = d2?.result || {};
-      const ufKeys = Object.keys(rawFields).filter(k => k.indexOf('UF_CRM') === 0);
-
-      if (!ufKeys.length) {
-        return new Response(JSON.stringify({ ok: false, debug: true, raw: d2 }), {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-        });
-      }
-
-      const fields = ufKeys.map(key => {
-        const f = rawFields[key];
-        const label = (f.listLabel && f.listLabel.trim() && f.listLabel !== key)
-          ? f.listLabel.trim()
-          : (f.formLabel && f.formLabel.trim() && f.formLabel !== key)
-            ? f.formLabel.trim()
-            : (f.filterLabel && f.filterLabel.trim() && f.filterLabel !== key)
-              ? f.filterLabel.trim()
-              : key;
-        return { id: key, label };
-      }).sort((a, b) => a.label.localeCompare(b.label));
-
-      return new Response(JSON.stringify({ ok: true, fields }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-      });
-    } catch(e) {
-      return new Response(JSON.stringify({ ok: false, error: String(e) }), { status: 500, headers: corsHeaders });
-    }
-  }
-
   // ── MAIN HANDLER (install + widget) ─────────────────────
   if (path === '' || path === '/' || path === '/install') {
     if (request.method === 'POST') {
