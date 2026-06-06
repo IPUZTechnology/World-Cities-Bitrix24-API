@@ -83,9 +83,10 @@ async function handleRequest(request) {
 '  if (PLACEMENT !== "CRM_DEAL_DETAIL_TAB" && PLACEMENT !== "CRM_LEAD_DETAIL_TAB") {' +
 '    showSetupPanel(); return;' +
 '  }' +
-'  var stored = localStorage.getItem("destinos_cfg");' +
-'  if (stored) { try { cfg = JSON.parse(stored); } catch(e) { cfg={}; } }' +
-'  showWidget();' +
+'  BX24.appOption.get("destinos_cfg", function(val) {' +
+'    if (val) { try { cfg = JSON.parse(val); } catch(e) { cfg={}; } }' +
+'    showWidget();' +
+'  });' +
 '});' +
 
 'function showSetupPanel() {' +
@@ -120,6 +121,7 @@ async function handleRequest(request) {
 '    "<div class=\\"widget-header\\"><span class=\\"widget-title\\">Destinos</span>" +' +
 '    "<button class=\\"btn-gear\\" onclick=\\"toggleSettings()\\">Config</button></div>" +' +
 '    "<div id=\\"settings-panel\\">" +' +
+'    "<div class=\\"setting-row\\"><label>ID Campo Destinos/Ciudades</label><input type=\\"text\\" id=\\"cfg-destinos\\" placeholder=\\"UF_CRM_XXXXXXXXXX\\"></div>" +' +
 '    "<div class=\\"setting-row\\"><label>ID Campo Pais</label><input type=\\"text\\" id=\\"cfg-pais\\" placeholder=\\"UF_CRM_XXXXXXXXXX\\"></div>" +' +
 '    "<div class=\\"setting-row\\"><label>ID Campo Region</label><input type=\\"text\\" id=\\"cfg-region\\" placeholder=\\"UF_CRM_XXXXXXXXXX\\"></div>" +' +
 '    "<button class=\\"btn-save\\" onclick=\\"saveConfig()\\">Guardar</button>" +' +
@@ -133,6 +135,7 @@ async function handleRequest(request) {
 '    "<div id=\\"tags\\"></div>" +' +
 '    "<button id=\\"btn-apply\\" onclick=\\"applyToDeal()\\">Guardar en Deal</button>" +' +
 '    "<div id=\\"status-msg\\"></div></div>";' +
+'  document.getElementById("cfg-destinos").value = cfg.destinos || "";' +
 '  document.getElementById("cfg-pais").value = cfg.pais || "";' +
 '  document.getElementById("cfg-region").value = cfg.region || "";' +
 '  if (cfg.pais && cfg.region) {' +
@@ -148,14 +151,15 @@ async function handleRequest(request) {
 '}' +
 
 'function saveConfig() {' +
-'  cfg = { pais: document.getElementById("cfg-pais").value.trim(), region: document.getElementById("cfg-region").value.trim() };' +
-'  if (!cfg.pais || !cfg.region) { alert("Completa los dos campos."); return; }' +
-'  localStorage.setItem("destinos_cfg", JSON.stringify(cfg));' +
-'  toggleSettings();' +
-'  document.getElementById("not-configured").style.display = "none";' +
-'  document.getElementById("search-section").style.display = "block";' +
-'  if (!allCities.length) loadCities();' +
-'  setStatus("Configuracion guardada", "ok");' +
+'  cfg = { pais: document.getElementById("cfg-pais").value.trim(), region: document.getElementById("cfg-region").value.trim(), destinos: document.getElementById("cfg-destinos").value.trim() };' +
+'  if (!cfg.pais || !cfg.region || !cfg.destinos) { alert("Completa los tres campos."); return; }' +
+'  BX24.appOption.set("destinos_cfg", JSON.stringify(cfg), function() {' +
+'    toggleSettings();' +
+'    document.getElementById("not-configured").style.display = "none";' +
+'    document.getElementById("search-section").style.display = "block";' +
+'    if (!allCities.length) loadCities();' +
+'    setStatus("Configuracion guardada", "ok");' +
+'  });' +
 '}' +
 
 'function loadCities() {' +
@@ -244,7 +248,9 @@ async function handleRequest(request) {
 '    if(regiones.indexOf(selected[i].region)<0) regiones.push(selected[i].region);' +
 '  }' +
 '  var entity=PLACEMENT.indexOf("LEAD")>=0?"crm.lead":"crm.deal";' +
-'  var fields={}; fields[cfg.pais]=paises.join(", "); fields[cfg.region]=regiones.join(", ");' +
+'  var ciudades=[];' +
+'  for(var i=0;i<selected.length;i++) ciudades.push(selected[i].ciudad);' +
+'  var fields={}; fields[cfg.pais]=paises.join(", "); fields[cfg.region]=regiones.join(", "); if(cfg.destinos) fields[cfg.destinos]=ciudades.join(", ");' +
 '  BX24.callMethod(entity+".update",{id:ENTITY_ID,fields:fields},function(result){' +
 '    if(result.error()){' +
 '      setStatus("Error: "+result.error(),"err");' +
