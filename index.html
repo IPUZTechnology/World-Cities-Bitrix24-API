@@ -3,14 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Buscador de Ciudades - RIPUZ</title>
+<title>Ciudades - RIPUZ</title>
+<script src="//api.bitrix24.com/api/v1/"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Arial, sans-serif; font-size: 14px; color: #333; background: #fff; padding: 12px; }
 
+  #loading { text-align: center; padding: 20px; color: #aaa; font-size: 13px; }
+
   /* SETTINGS */
   #settings-panel { display: none; background: #f7f7f7; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
-  #settings-panel h3 { font-size: 13px; color: #555; margin-bottom: 12px; text-transform: uppercase; letter-spacing: .5px; }
+  #settings-panel h3 { font-size: 12px; color: #777; margin-bottom: 12px; text-transform: uppercase; letter-spacing: .5px; }
   .setting-row { margin-bottom: 10px; }
   .setting-row label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
   .setting-row input { width: 100%; padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; }
@@ -22,32 +25,32 @@
   /* HEADER */
   .widget-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
   .widget-title { font-size: 13px; font-weight: 600; color: #444; }
-  .btn-gear { background: none; border: none; cursor: pointer; color: #aaa; font-size: 16px; padding: 2px 4px; }
+  .btn-gear { background: none; border: none; cursor: pointer; color: #aaa; font-size: 15px; padding: 2px 4px; }
   .btn-gear:hover { color: #5b6cf6; }
 
   /* SEARCH */
   .search-wrap { position: relative; }
   .search-wrap input { width: 100%; padding: 8px 12px 8px 34px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; }
   .search-wrap input:focus { outline: none; border-color: #5b6cf6; box-shadow: 0 0 0 2px rgba(91,108,246,.12); }
-  .search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: #bbb; font-size: 14px; pointer-events: none; }
+  .search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: #bbb; font-size: 13px; pointer-events: none; }
 
   /* DROPDOWN */
-  #dropdown { display: none; position: absolute; z-index: 9999; background: #fff; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.1); max-height: 220px; overflow-y: auto; width: 100%; margin-top: 4px; }
+  #dropdown { display: none; position: absolute; z-index: 9999; background: #fff; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.1); max-height: 200px; overflow-y: auto; width: 100%; margin-top: 4px; }
   .drop-item { padding: 8px 12px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #f0f0f0; }
   .drop-item:last-child { border-bottom: none; }
-  .drop-item:hover { background: #f0f2ff; }
+  .drop-item:hover, .drop-item.active { background: #f0f2ff; }
   .drop-city { font-weight: 600; color: #333; }
   .drop-meta { font-size: 11px; color: #888; margin-top: 1px; }
   .drop-empty { padding: 12px; text-align: center; color: #aaa; font-size: 12px; }
 
   /* TAGS */
-  #tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; min-height: 10px; }
+  #tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; min-height: 4px; }
   .tag { display: flex; align-items: center; gap: 5px; background: #eef0ff; border: 1px solid #c5caff; border-radius: 20px; padding: 4px 10px; font-size: 12px; color: #3a47c9; }
-  .tag span { max-width: 160px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tag span { max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .tag-remove { cursor: pointer; color: #8891e0; font-size: 14px; line-height: 1; }
   .tag-remove:hover { color: #e05555; }
 
-  /* SAVE BTN */
+  /* APPLY BTN */
   #btn-apply { display: none; margin-top: 12px; width: 100%; padding: 9px; background: #5b6cf6; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
   #btn-apply:hover { background: #4a5ae0; }
   #btn-apply:disabled { background: #bbb; cursor: not-allowed; }
@@ -66,38 +69,37 @@
 </head>
 <body>
 
-<div class="widget-header">
-  <span class="widget-title">🌍 Ciudades</span>
-  <button class="btn-gear" onclick="toggleSettings()" title="Configuración">⚙️</button>
-</div>
+<div id="loading">Iniciando...</div>
 
-<!-- SETTINGS PANEL -->
-<div id="settings-panel">
-  <h3>Configuración</h3>
-  <div class="setting-row">
-    <label>URL de Bitrix24</label>
-    <input type="text" id="cfg-url" placeholder="https://tuempresa.bitrix24.com">
-  </div>
-  <div class="setting-row">
-    <label>Webhook Token (REST)</label>
-    <input type="text" id="cfg-token" placeholder="xxxxxxxxxxxxxxxx">
-  </div>
-  <div class="setting-row">
-    <label>ID Campo País</label>
-    <input type="text" id="cfg-pais" placeholder="UF_CRM_1780749923">
-  </div>
-  <div class="setting-row">
-    <label>ID Campo Región</label>
-    <input type="text" id="cfg-region" placeholder="UF_CRM_1780749938">
-  </div>
-  <button class="btn-save" onclick="saveConfig()">Guardar</button>
-  <button class="btn-cancel" onclick="toggleSettings()">Cancelar</button>
-</div>
+<div id="app" style="display:none">
 
-<!-- MAIN WIDGET -->
-<div id="main-widget">
+  <div class="widget-header">
+    <span class="widget-title">🌍 Ciudades</span>
+    <button class="btn-gear" onclick="toggleSettings()" title="Configuración">⚙️</button>
+  </div>
+
+  <!-- SETTINGS -->
+  <div id="settings-panel">
+    <h3>Configuración</h3>
+    <div class="setting-row">
+      <label>Webhook Token (REST)</label>
+      <input type="text" id="cfg-token" placeholder="xxxxxxxxxxxxxxxx/xx/">
+    </div>
+    <div class="setting-row">
+      <label>ID Campo País</label>
+      <input type="text" id="cfg-pais" placeholder="UF_CRM_1780749923">
+    </div>
+    <div class="setting-row">
+      <label>ID Campo Región</label>
+      <input type="text" id="cfg-region" placeholder="UF_CRM_1780749938">
+    </div>
+    <button class="btn-save" onclick="saveConfig()">Guardar</button>
+    <button class="btn-cancel" onclick="toggleSettings()">Cancelar</button>
+  </div>
+
+  <!-- MAIN -->
   <div id="not-configured">
-    <div>Widget no configurado</div>
+    <div>Widget no configurado aún</div>
     <button onclick="toggleSettings()">⚙️ Configurar ahora</button>
   </div>
 
@@ -112,23 +114,40 @@
     <button id="btn-apply" onclick="applyToDeal()">Guardar en Deal</button>
     <div id="status-msg"></div>
   </div>
+
 </div>
 
 <script>
   const CITIES_URL = 'https://world-cities-bitrix24-api.pages.dev/src/cities.json';
   let allCities = [];
-  let selected = [];
+  let selected  = [];
   let dropIndex = -1;
   let cfg = {};
+  let BX24_DOMAIN = '';
+  let ENTITY_ID   = '';
+  let PLACEMENT   = '';
+
+  // ── BX24 INIT ───────────────────────────────────────────
+  BX24.init(function() {
+    var info = BX24.placement.info();
+    PLACEMENT   = info.placement || '';
+    ENTITY_ID   = (info.options && info.options.ID) ? info.options.ID : '';
+    BX24_DOMAIN = BX24.getDomain ? BX24.getDomain() : '';
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display     = 'block';
+
+    loadConfig();
+  });
 
   // ── CONFIG ──────────────────────────────────────────────
   function loadConfig() {
     try { cfg = JSON.parse(localStorage.getItem('ripuz_cities_cfg') || '{}'); } catch(e) { cfg = {}; }
-    document.getElementById('cfg-url').value    = cfg.url    || '';
     document.getElementById('cfg-token').value  = cfg.token  || '';
     document.getElementById('cfg-pais').value   = cfg.pais   || '';
     document.getElementById('cfg-region').value = cfg.region || '';
-    if (cfg.url && cfg.token && cfg.pais && cfg.region) {
+
+    if (cfg.token && cfg.pais && cfg.region) {
       document.getElementById('not-configured').style.display = 'none';
       document.getElementById('search-section').style.display = 'block';
       loadCities();
@@ -137,13 +156,12 @@
 
   function saveConfig() {
     cfg = {
-      url:    document.getElementById('cfg-url').value.trim().replace(/\/$/, ''),
       token:  document.getElementById('cfg-token').value.trim(),
       pais:   document.getElementById('cfg-pais').value.trim(),
       region: document.getElementById('cfg-region').value.trim()
     };
-    if (!cfg.url || !cfg.token || !cfg.pais || !cfg.region) {
-      alert('Completa todos los campos de configuración.'); return;
+    if (!cfg.token || !cfg.pais || !cfg.region) {
+      alert('Completa todos los campos.'); return;
     }
     localStorage.setItem('ripuz_cities_cfg', JSON.stringify(cfg));
     toggleSettings();
@@ -154,47 +172,48 @@
   }
 
   function toggleSettings() {
-    const p = document.getElementById('settings-panel');
+    var p = document.getElementById('settings-panel');
     p.style.display = p.style.display === 'none' ? 'block' : 'none';
   }
 
   // ── LOAD CITIES ─────────────────────────────────────────
   function loadCities() {
-    setStatus('Cargando base de ciudades...', 'info');
+    setStatus('Cargando ciudades...', 'info');
     fetch(CITIES_URL)
-      .then(r => r.json())
-      .then(data => { allCities = data; setStatus('', ''); })
-      .catch(() => setStatus('Error cargando ciudades. Verifica la URL del repo.', 'err'));
+      .then(function(r) { return r.json(); })
+      .then(function(data) { allCities = data; setStatus('', ''); })
+      .catch(function() { setStatus('Error cargando ciudades.', 'err'); });
   }
 
   // ── SEARCH ───────────────────────────────────────────────
   function onSearch(val) {
     dropIndex = -1;
-    const q = val.trim().toLowerCase();
+    var q = val.trim().toLowerCase();
     if (q.length < 2) { closeDropdown(); return; }
-    const results = allCities
-      .filter(c => c.ciudad.toLowerCase().startsWith(q))
+    var results = allCities
+      .filter(function(c) { return c.ciudad.toLowerCase().indexOf(q) === 0; })
       .slice(0, 50);
-    showDropdown(results, val);
+    showDropdown(results, val.trim());
   }
 
   function showDropdown(results, q) {
-    const dd = document.getElementById('dropdown');
+    var dd = document.getElementById('dropdown');
     if (!results.length) {
       dd.innerHTML = '<div class="drop-empty">Sin resultados</div>';
       dd.style.display = 'block'; return;
     }
-    dd.innerHTML = results.map((c, i) =>
-      `<div class="drop-item" data-i="${i}" onmousedown="selectCity('${esc(c.ciudad)}','${esc(c.pais)}','${esc(c.region)}')">
-        <div class="drop-city">${highlight(c.ciudad, q)}</div>
-        <div class="drop-meta">${c.pais} · ${c.region}</div>
-      </div>`
-    ).join('');
+    dd.innerHTML = results.map(function(c, i) {
+      return '<div class="drop-item" data-i="' + i + '" onmousedown="selectCity(\'' +
+        esc(c.ciudad) + '\',\'' + esc(c.pais) + '\',\'' + esc(c.region) + '\')">' +
+        '<div class="drop-city">' + highlight(c.ciudad, q) + '</div>' +
+        '<div class="drop-meta">' + c.pais + ' · ' + c.region + '</div>' +
+        '</div>';
+    }).join('');
     dd.style.display = 'block';
   }
 
   function highlight(city, q) {
-    const i = city.toLowerCase().indexOf(q.toLowerCase());
+    var i = city.toLowerCase().indexOf(q.toLowerCase());
     if (i < 0) return city;
     return city.slice(0,i) + '<strong>' + city.slice(i, i+q.length) + '</strong>' + city.slice(i+q.length);
   }
@@ -204,26 +223,26 @@
   }
 
   function onKeyDown(e) {
-    const items = document.querySelectorAll('.drop-item');
-    if (e.key === 'ArrowDown') { dropIndex = Math.min(dropIndex+1, items.length-1); highlightItem(items); }
-    else if (e.key === 'ArrowUp') { dropIndex = Math.max(dropIndex-1, 0); highlightItem(items); }
+    var items = document.querySelectorAll('.drop-item');
+    if (e.key === 'ArrowDown')  { dropIndex = Math.min(dropIndex+1, items.length-1); highlightItem(items); }
+    else if (e.key === 'ArrowUp')   { dropIndex = Math.max(dropIndex-1, 0); highlightItem(items); }
     else if (e.key === 'Enter' && dropIndex >= 0) { items[dropIndex].dispatchEvent(new MouseEvent('mousedown')); }
     else if (e.key === 'Escape') { closeDropdown(); }
   }
 
   function highlightItem(items) {
-    items.forEach((el, i) => el.style.background = i === dropIndex ? '#f0f2ff' : '');
+    items.forEach(function(el, i) { el.classList.toggle('active', i === dropIndex); });
     if (items[dropIndex]) items[dropIndex].scrollIntoView({block:'nearest'});
   }
 
-  function esc(s) { return s.replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
+  function esc(s) { return (s || '').replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 
   // ── SELECT / REMOVE ──────────────────────────────────────
   function selectCity(ciudad, pais, region) {
     closeDropdown();
     document.getElementById('search-input').value = '';
-    if (selected.find(s => s.ciudad === ciudad && s.pais === pais)) return;
-    selected.push({ ciudad, pais, region });
+    if (selected.find(function(s) { return s.ciudad === ciudad && s.pais === pais; })) return;
+    selected.push({ ciudad: ciudad, pais: pais, region: region });
     renderTags();
     document.getElementById('btn-apply').style.display = 'block';
   }
@@ -235,73 +254,67 @@
   }
 
   function renderTags() {
-    const container = document.getElementById('tags');
-    container.innerHTML = selected.map((s, i) =>
-      `<div class="tag">
-        <span title="${s.ciudad}, ${s.pais}">${s.ciudad}</span>
-        <span class="tag-remove" onclick="removeCity(${i})">×</span>
-      </div>`
-    ).join('');
+    var container = document.getElementById('tags');
+    container.innerHTML = selected.map(function(s, i) {
+      return '<div class="tag">' +
+        '<span title="' + s.ciudad + ', ' + s.pais + '">' + s.ciudad + '</span>' +
+        '<span class="tag-remove" onclick="removeCity(' + i + ')">×</span>' +
+        '</div>';
+    }).join('');
   }
 
   // ── APPLY TO DEAL ────────────────────────────────────────
   function applyToDeal() {
     if (!selected.length) return;
-    const btn = document.getElementById('btn-apply');
+    if (!ENTITY_ID) { setStatus('No se detectó el ID del Deal.', 'err'); return; }
+
+    var btn = document.getElementById('btn-apply');
     btn.disabled = true;
     btn.textContent = 'Guardando...';
 
-    const dealId = getDealId();
-    if (!dealId) { setStatus('No se pudo obtener el ID del Deal.', 'err'); btn.disabled=false; btn.textContent='Guardar en Deal'; return; }
+    var paises  = unique(selected.map(function(s) { return s.pais; })).join(', ');
+    var regiones = unique(selected.map(function(s) { return s.region; })).join(', ');
 
-    const paises  = [...new Set(selected.map(s => s.pais))].join(', ');
-    const regiones = [...new Set(selected.map(s => s.region))].join(', ');
+    // Determinar entidad (Deal o Lead)
+    var entity = PLACEMENT.indexOf('LEAD') >= 0 ? 'crm.lead' : 'crm.deal';
 
-    const url = `${cfg.url}/rest/${cfg.token}/crm.deal.update.json`;
-    const body = new FormData();
-    body.append('id', dealId);
-    body.append(`fields[${cfg.pais}]`,   paises);
-    body.append(`fields[${cfg.region}]`, regiones);
+    var fields = {};
+    fields[cfg.pais]   = paises;
+    fields[cfg.region] = regiones;
 
-    fetch(url, { method: 'POST', body })
-      .then(r => r.json())
-      .then(res => {
-        if (res.result) {
-          setStatus('✓ Guardado correctamente', 'ok');
-          btn.textContent = '✓ Guardado';
-          setTimeout(() => { btn.textContent = 'Guardar en Deal'; btn.disabled = false; }, 2500);
-        } else {
-          setStatus('Error: ' + JSON.stringify(res.error_description || res), 'err');
-          btn.disabled = false; btn.textContent = 'Guardar en Deal';
-        }
-      })
-      .catch(err => {
-        setStatus('Error de conexión con Bitrix24.', 'err');
-        btn.disabled = false; btn.textContent = 'Guardar en Deal';
-      });
+    BX24.callMethod(entity + '.update', {
+      id: ENTITY_ID,
+      fields: fields
+    }, function(result) {
+      if (result.error()) {
+        setStatus('Error: ' + result.error(), 'err');
+        btn.disabled = false;
+        btn.textContent = 'Guardar en Deal';
+      } else {
+        setStatus('✓ Guardado correctamente', 'ok');
+        btn.textContent = '✓ Guardado';
+        setTimeout(function() {
+          btn.textContent = 'Guardar en Deal';
+          btn.disabled = false;
+        }, 2500);
+      }
+    });
   }
 
-  function getDealId() {
-    try {
-      // Bitrix24 pasa el ID del Deal en la URL del iframe como parámetro
-      const params = new URLSearchParams(window.location.search);
-      return params.get('ENTITY_ID') || params.get('entity_id') || params.get('id');
-    } catch(e) { return null; }
+  function unique(arr) {
+    return arr.filter(function(v, i, a) { return a.indexOf(v) === i; });
   }
 
   function setStatus(msg, type) {
-    const el = document.getElementById('status-msg');
+    var el = document.getElementById('status-msg');
     el.textContent = msg;
     el.className = type === 'ok' ? 'msg-ok' : type === 'err' ? 'msg-err' : 'msg-info';
   }
 
-  // ── CLOSE DROPDOWN ON OUTSIDE CLICK ─────────────────────
-  document.addEventListener('click', e => {
+  // Cerrar dropdown al click fuera
+  document.addEventListener('click', function(e) {
     if (!e.target.closest('.search-wrap')) closeDropdown();
   });
-
-  // ── INIT ─────────────────────────────────────────────────
-  loadConfig();
 </script>
 </body>
 </html>
