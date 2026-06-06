@@ -400,7 +400,6 @@ function renderSettingsPage(fieldCfg, domain) {
     '  }' +
     '  el.innerHTML = html;' +
     '}' +
-
     'function saveConfig() {' +
     '  var d = document.getElementById("f-destinos").value.trim();' +
     '  var p = document.getElementById("f-pais").value.trim();' +
