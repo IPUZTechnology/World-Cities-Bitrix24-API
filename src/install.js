@@ -199,11 +199,11 @@ async function handleRequest(request, event) {
         });
       }
 
-      // Si es DEFAULT sin AUTH_ID válido → es apertura desde LEFT_MENU, no instalación
-      const authId = fdPeek ? String(fdPeek.get('AUTH_ID') || '').trim() : '';
-      const isInstall = authId && authId.length > 10;
+      // Instalación real — Bitrix manda auth[access_token] o ACCESS_TOKEN
+      const authToken = fdPeek ? String(fdPeek.get('auth[access_token]') || fdPeek.get('ACCESS_TOKEN') || fdPeek.get('access_token') || '').trim() : '';
+      const isInstall = authToken && authToken.length > 10;
 
-      // Instalación real — solo si trae AUTH_ID válido
+      // Instalación real — solo si trae access_token válido
       if (isInstall) return handleInstall(request, event, url, corsHeaders, fdPeek);
     }
 
