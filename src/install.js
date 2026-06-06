@@ -32,8 +32,13 @@ async function handleRequest(request, event) {
   if (path === '' || path === '/' || path === '/install') {
     if (request.method === 'POST') {
       const fdPeek = await request.clone().formData().catch(() => null);
-      const placement = fdPeek ? String(fdPeek.get('PLACEMENT') || fdPeek.get('placement') || '').trim() : '';
-      const domain = fdPeek ? String(fdPeek.get('DOMAIN') || fdPeek.get('domain') || url.searchParams.get('DOMAIN') || '').trim().toLowerCase() : '';
+      // Bitrix24 puede enviar PLACEMENT en querystring o en body
+      const placementQS = String(url.searchParams.get('PLACEMENT') || url.searchParams.get('placement') || '').trim();
+      const placementBody = fdPeek ? String(fdPeek.get('PLACEMENT') || fdPeek.get('placement') || '').trim() : '';
+      const placement = placementQS || placementBody;
+      const domainQS = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
+      const domainBody = fdPeek ? String(fdPeek.get('DOMAIN') || fdPeek.get('domain') || '').trim().toLowerCase() : '';
+      const domain = domainBody || domainQS;
 
       // DEBUG - mostrar placement recibido
       if (placement === 'LEFT_MENU' || placement.toLowerCase().includes('left') || placement.toLowerCase().includes('menu')) {
