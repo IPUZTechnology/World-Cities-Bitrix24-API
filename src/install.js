@@ -59,12 +59,43 @@ async function handleRequest(request, event) {
     }
 
     const accessToken = oauth.auth.access_token;
+    const refreshToken = oauth.auth.refresh_token;
     const restBase = 'https://' + domain + '/rest/';
-    // Método Bitrix según entidad
     const fieldsMethod = entity === 'lead' ? 'crm.lead.fields.json' : 'crm.deal.fields.json';
 
+    // Helper: refrescar token si el actual expiró
+    async function getValidToken() {
+      // Intentar con token actual primero
+      const testR = await fetch(restBase + 'profile.json?auth=' + encodeURIComponent(accessToken), { method: 'GET' });
+      const testD = await testR.json();
+      if (!testD?.error) return accessToken; // Token válido
+
+      // Token expirado → refrescar
+      if (!refreshToken) return accessToken; // Sin refresh, intentar igual
+      const B24_CLIENT_ID = typeof CLIENT_ID !== 'undefined' ? CLIENT_ID : '';
+      const B24_CLIENT_SECRET = typeof CLIENT_SECRET !== 'undefined' ? CLIENT_SECRET : '';
+      const refreshUrl = 'https://oauth.bitrix.info/oauth/token/?' +
+        'grant_type=refresh_token&client_id=' + encodeURIComponent(B24_CLIENT_ID) +
+        '&client_secret=' + encodeURIComponent(B24_CLIENT_SECRET) +
+        '&refresh_token=' + encodeURIComponent(refreshToken);
+      const rr = await fetch(refreshUrl, { method: 'GET' });
+      const rd = await rr.json();
+      if (rd?.access_token) {
+        // Guardar nuevo token en KV
+        oauth.auth.access_token = rd.access_token;
+        oauth.auth.refresh_token = rd.refresh_token || refreshToken;
+        oauth.storedAt = new Date().toISOString();
+        if (typeof TENANT_CONFIG !== 'undefined') {
+          await TENANT_CONFIG.put('oauth:domain:' + domain, JSON.stringify(oauth)).catch(() => {});
+        }
+        return rd.access_token;
+      }
+      return accessToken; // Fallback
+    }
+
     try {
-      const r2 = await fetch(restBase + fieldsMethod + '?auth=' + encodeURIComponent(accessToken), {
+      const validToken = await getValidToken();
+      const r2 = await fetch(restBase + fieldsMethod + '?auth=' + encodeURIComponent(validToken), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
       });
       const d2 = await r2.json();
