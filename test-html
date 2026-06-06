@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="//api.bitrix24.com/api/v1/"></script>
+</head>
+<body>
+<div id="out">Cargando...</div>
+<script>
+  document.getElementById('out').innerHTML = 'SDK cargado. Llamando BX24.init...';
+  BX24.init(function(){
+    var info = BX24.placement.info();
+    document.getElementById('out').innerHTML = 
+      'OK! Placement: ' + info.placement + 
+      ' | ID: ' + (info.options ? info.options.ID : 'n/a');
+  });
+</script>
+</body>
+</html>
