@@ -103,7 +103,8 @@ async function handleRequest(request, event) {
         return { id: key, label };
       }).sort((a, b) => a.label.localeCompare(b.label));
 
-      return new Response(JSON.stringify({ ok: true, fields }), {
+      // Debug: incluir raw del primer campo para diagnóstico
+      return new Response(JSON.stringify({ ok: true, fields, _debug_sample: rawFields[ufKeys[0]] }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     } catch(e) {
