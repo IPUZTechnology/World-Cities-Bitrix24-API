@@ -1,6 +1,44 @@
 const CITIES_URL = 'https://world-cities-bitrix24-api.pages.dev/src/cities.json';
 const WORKER_URL = 'https://world-cities-bitrix24.ripuz.workers.dev';
 
+// ── Refresh OAuth global — llamar antes de cualquier llamada a Bitrix ─────────
+async function refreshOAuth(domain, oauth) {
+  const refreshToken = oauth?.auth?.refresh_token;
+  const B24_CLIENT_ID = (typeof CLIENT_ID !== 'undefined' ? CLIENT_ID : '') || '';
+  const B24_CLIENT_SECRET = (typeof CLIENT_SECRET !== 'undefined' ? CLIENT_SECRET : '') || '';
+  if (!refreshToken || !B24_CLIENT_ID || !B24_CLIENT_SECRET) return oauth;
+  try {
+    const r = await fetch(
+      'https://oauth.bitrix.info/oauth/token/?grant_type=refresh_token' +
+      '&client_id=' + encodeURIComponent(B24_CLIENT_ID) +
+      '&client_secret=' + encodeURIComponent(B24_CLIENT_SECRET) +
+      '&refresh_token=' + encodeURIComponent(refreshToken),
+      { method: 'GET' }
+    );
+    const rd = await r.json();
+    if (rd?.access_token) {
+      oauth.auth.access_token = rd.access_token;
+      oauth.auth.refresh_token = rd.refresh_token || refreshToken;
+      oauth.storedAt = new Date().toISOString();
+      if (typeof TENANT_CONFIG !== 'undefined') {
+        await TENANT_CONFIG.put('oauth:domain:' + domain, JSON.stringify(oauth)).catch(() => {});
+      }
+    }
+  } catch(e) { console.error('refreshOAuth error', e); }
+  return oauth;
+}
+
+// ── Helper: leer OAuth desde KV y refrescar ───────────────────────────────────
+async function getOAuth(domain) {
+  if (typeof TENANT_CONFIG === 'undefined') return null;
+  const raw = await TENANT_CONFIG.get('oauth:domain:' + domain).catch(() => null);
+  if (!raw) return null;
+  let oauth = null;
+  try { oauth = JSON.parse(raw); } catch(e) { return null; }
+  oauth = await refreshOAuth(domain, oauth);
+  return oauth;
+}
+
 addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request, event));
 });
@@ -27,11 +65,7 @@ async function handleRequest(request, event) {
   if (path === '/rebind' && request.method === 'GET') {
     const domain = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
     if (!domain) return new Response('Falta DOMAIN', { status: 400 });
-    let oauth = null;
-    if (typeof TENANT_CONFIG !== 'undefined') {
-      const raw = await TENANT_CONFIG.get('oauth:domain:' + domain).catch(() => null);
-      if (raw) { try { oauth = JSON.parse(raw); } catch(e) {} }
-    }
+    const oauth = await getOAuth(domain);
     if (!oauth?.auth?.access_token) return new Response('OAuth no encontrado para ' + domain, { status: 404 });
     await bindPlacements(domain, oauth.auth.access_token);
     return new Response('Placements re-registrados para ' + domain, { status: 200, headers: corsHeaders });
@@ -42,57 +76,22 @@ async function handleRequest(request, event) {
     return handleConfigSave(request, corsHeaders);
   }
 
-  // ── FIELDS API — devuelve campos UF_ con labels reales ───
-  // GET /fields?domain=megatravel.bitrix24.co&entity=deal|lead
   if (path === '/fields' && request.method === 'GET') {
     const domain = String(url.searchParams.get('domain') || url.searchParams.get('DOMAIN') || '').trim().toLowerCase();
     const entity = String(url.searchParams.get('entity') || 'deal').trim().toLowerCase();
     if (!domain) return new Response(JSON.stringify({ ok: false, error: 'Falta domain' }), { status: 400, headers: corsHeaders });
 
-    let oauth = null;
-    if (typeof TENANT_CONFIG !== 'undefined') {
-      const raw = await TENANT_CONFIG.get('oauth:domain:' + domain).catch(() => null);
-      if (raw) { try { oauth = JSON.parse(raw); } catch(e) {} }
-    }
+    const oauth = await getOAuth(domain);
     if (!oauth?.auth?.access_token) {
       return new Response(JSON.stringify({ ok: false, error: 'OAuth no encontrado para ' + domain }), { status: 404, headers: corsHeaders });
     }
 
     const accessToken = oauth.auth.access_token;
-    const refreshToken = oauth.auth.refresh_token;
     const restBase = 'https://' + domain + '/rest/';
     const fieldsMethod = entity === 'lead' ? 'crm.lead.fields.json' : 'crm.deal.fields.json';
 
-    // Helper: refrescar token siempre (más confiable que verificar con profile)
-    async function getValidToken() {
-      const B24_CLIENT_ID = (typeof CLIENT_ID !== 'undefined' ? CLIENT_ID : '') || '';
-      const B24_CLIENT_SECRET = (typeof CLIENT_SECRET !== 'undefined' ? CLIENT_SECRET : '') || '';
-      if (!refreshToken || !B24_CLIENT_ID || !B24_CLIENT_SECRET) return accessToken;
-      const refreshUrl = 'https://oauth.bitrix.info/oauth/token/?' +
-        'grant_type=refresh_token&client_id=' + encodeURIComponent(B24_CLIENT_ID) +
-        '&client_secret=' + encodeURIComponent(B24_CLIENT_SECRET) +
-        '&refresh_token=' + encodeURIComponent(refreshToken);
-      try {
-        const rr = await fetch(refreshUrl, { method: 'GET' });
-        const rd = await rr.json();
-        if (rd?.access_token) {
-          oauth.auth.access_token = rd.access_token;
-          oauth.auth.refresh_token = rd.refresh_token || refreshToken;
-          oauth.storedAt = new Date().toISOString();
-          if (typeof TENANT_CONFIG !== 'undefined') {
-            await TENANT_CONFIG.put('oauth:domain:' + domain, JSON.stringify(oauth)).catch(() => {});
-          }
-          return rd.access_token;
-        }
-        console.error('refresh failed:', JSON.stringify(rd));
-      } catch(e) { console.error('refresh error', e); }
-      return accessToken;
-    }
-
     try {
-      const validToken = await getValidToken();
-      const tokenChanged = validToken !== accessToken;
-      const r2 = await fetch(restBase + fieldsMethod + '?auth=' + encodeURIComponent(validToken), {
+      const r2 = await fetch(restBase + fieldsMethod + '?auth=' + encodeURIComponent(accessToken), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
       });
       const d2 = await r2.json();
@@ -111,7 +110,7 @@ async function handleRequest(request, event) {
         return { id: key, label };
       }).sort((a, b) => a.label.localeCompare(b.label));
 
-      return new Response(JSON.stringify({ ok: true, fields, entity, _refreshed: tokenChanged }), {
+      return new Response(JSON.stringify({ ok: true, fields, entity }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     } catch(e) {
