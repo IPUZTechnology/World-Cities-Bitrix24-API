@@ -441,7 +441,7 @@ function renderWidget(fieldCfg, domain, placement) {
     'function renderTags() {' +
     '  var h="";' +
     '  for(var i=0;i<selected.length;i++){' +
-    '    h+="<div class=\\"tag\\"><span>"+selected[i].ciudad+"</span><span class=\\"tr\\" onclick=\\"removeCity("+i+")\\">x</span></div>";' +
+    '    h+="<div class=\\"tag\\"><span>"+selected[i].ciudad+", "+selected[i].pais+"</span><span class=\\"tr\\" onclick=\\"removeCity("+i+")\\">x</span></div>";' +
     '  }' +
     '  document.getElementById("tags").innerHTML=h;' +
     '}' +
