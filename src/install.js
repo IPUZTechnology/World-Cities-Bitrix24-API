@@ -163,6 +163,10 @@ async function handleRequest(request, event) {
       const domainQS = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
       const domainBody = fdPeek ? String(fdPeek.get('DOMAIN') || fdPeek.get('domain') || '').trim().toLowerCase() : '';
       const domain = domainBody || domainQS;
+      const authToken = fdPeek ? String(fdPeek.get('auth[access_token]') || fdPeek.get('ACCESS_TOKEN') || fdPeek.get('access_token') || '').trim() : '';
+
+      // LOG para diagnóstico
+      console.log('POST_DEBUG', JSON.stringify({ placement, domain, authToken: authToken.substring(0,10), allKeys: fdPeek ? [...fdPeek.keys()] : [] }));
 
       // DEBUG - mostrar placement recibido
       // Bitrix manda PLACEMENT=DEFAULT cuando abre desde LEFT_MENU
