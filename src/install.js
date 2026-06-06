@@ -230,10 +230,49 @@ function renderSettingsPage(fieldCfg, domain) {
 
     '<script>' +
     'var WORKER_URL = "' + WORKER_URL + '";' +
+    'var FIELD_DESTINOS = "' + (fieldCfg.destinos||'') + '";' +
+    'var FIELD_PAIS = "' + (fieldCfg.pais||'') + '";' +
+    'var FIELD_REGION = "' + (fieldCfg.region||'') + '";' +
     'var DOMAIN = "' + domain + '";' +
     'BX24.init(function() {' +
     '  if (!DOMAIN) DOMAIN = String(BX24.getDomain ? BX24.getDomain() : "");' +
+    '  loadFields();' +
     '});' +
+    'function loadFields() {' +
+    '  BX24.callMethod("crm.deal.fields", {}, function(r) {' +
+    '    if (r.error()) return;' +
+    '    var fields = r.data();' +
+    '    var ufFields = [];' +
+    '    for (var key in fields) {' +
+    '      if (key.indexOf("UF_CRM") === 0) {' +
+    '        var f = fields[key];' +
+    '        ufFields.push({ id: key, title: f.title || key });' +
+    '      }' +
+    '    }' +
+    '    ufFields.sort(function(a,b){ return a.title.localeCompare(b.title); });' +
+    '    fillDropdown("f-destinos", ufFields, FIELD_DESTINOS);' +
+    '    fillDropdown("f-pais", ufFields, FIELD_PAIS);' +
+    '    fillDropdown("f-region", ufFields, FIELD_REGION);' +
+    '  });' +
+    '}' +
+    'function fillDropdown(id, fields, currentVal) {' +
+    '  var el = document.getElementById(id);' +
+    '  if (!el) return;' +
+    '  var sel = document.createElement("select");' +
+    '  sel.id = id;' +
+    '  sel.style.cssText = "width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;background:#fff";' +
+    '  var opt0 = document.createElement("option");' +
+    '  opt0.value = ""; opt0.textContent = "-- Selecciona un campo --";' +
+    '  sel.appendChild(opt0);' +
+    '  for (var i=0;i<fields.length;i++) {' +
+    '    var opt = document.createElement("option");' +
+    '    opt.value = fields[i].id;' +
+    '    opt.textContent = fields[i].title + " (" + fields[i].id + ")";' +
+    '    if (fields[i].id === currentVal) opt.selected = true;' +
+    '    sel.appendChild(opt);' +
+    '  }' +
+    '  el.parentNode.replaceChild(sel, el);' +
+    '}' +
     'function saveConfig() {' +
     '  var d = document.getElementById("f-destinos").value.trim();' +
     '  var p = document.getElementById("f-pais").value.trim();' +
@@ -299,6 +338,9 @@ function renderWidget(fieldCfg, domain, placement) {
     '<script>' +
     'var CITIES_URL = "' + CITIES_URL + '";' +
     'var WORKER_URL = "' + WORKER_URL + '";' +
+    'var FIELD_DESTINOS = "' + (fieldCfg.destinos||'') + '";' +
+    'var FIELD_PAIS = "' + (fieldCfg.pais||'') + '";' +
+    'var FIELD_REGION = "' + (fieldCfg.region||'') + '";' +
     'var FIELD_DESTINOS = "' + (fieldCfg.destinos||'') + '";' +
     'var FIELD_PAIS = "' + (fieldCfg.pais||'') + '";' +
     'var FIELD_REGION = "' + (fieldCfg.region||'') + '";' +
