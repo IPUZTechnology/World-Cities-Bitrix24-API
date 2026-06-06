@@ -110,7 +110,10 @@ async function handleRequest(request, event) {
         return { id: key, label };
       }).sort((a, b) => a.label.localeCompare(b.label));
 
-      return new Response(JSON.stringify({ ok: true, fields, entity }), {
+      return new Response(JSON.stringify({ 
+        ok: true, fields, entity,
+        _debug: { totalKeys: Object.keys(rawFields).length, ufKeys: ufKeys.length, sampleKey: Object.keys(rawFields)[0], bitrixError: d2?.error || null }
+      }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     } catch(e) {
