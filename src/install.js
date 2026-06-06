@@ -124,10 +124,15 @@ async function handleRequest(request, event) {
       const isLeftMenu = placement === 'DEFAULT' || placement === 'LEFT_MENU' || 
                          placement.toLowerCase().includes('left') || placement.toLowerCase().includes('menu');
       if (isLeftMenu) {
-        let fieldCfg = { destinos: '', pais: '', region: '' };
+        let fieldCfg = { destinos: '', pais: '', region: '', lead_destinos: '', lead_pais: '', lead_region: '' };
         if (typeof TENANT_CONFIG !== 'undefined' && domain) {
-          const raw = await TENANT_CONFIG.get('fields:' + domain).catch(() => null);
-          if (raw) { try { fieldCfg = JSON.parse(raw); } catch(e) {} }
+          // Cargar config de deal
+          const rawDeal = await TENANT_CONFIG.get('fields:' + domain + ':deal').catch(() => null)
+                       || await TENANT_CONFIG.get('fields:' + domain).catch(() => null);
+          if (rawDeal) { try { const d = JSON.parse(rawDeal); fieldCfg.destinos = d.destinos||''; fieldCfg.pais = d.pais||''; fieldCfg.region = d.region||''; } catch(e) {} }
+          // Cargar config de lead
+          const rawLead = await TENANT_CONFIG.get('fields:' + domain + ':lead').catch(() => null);
+          if (rawLead) { try { const l = JSON.parse(rawLead); fieldCfg.lead_destinos = l.destinos||''; fieldCfg.lead_pais = l.pais||''; fieldCfg.lead_region = l.region||''; } catch(e) {} }
         }
         return new Response(renderSettingsPage(fieldCfg, domain), {
           status: 200,
@@ -239,13 +244,24 @@ async function handleConfigSave(request, corsHeaders) {
   try {
     const body = await request.json();
     const domain = String(body.domain || '').trim().toLowerCase();
+    const entity = String(body.entity || 'deal').trim().toLowerCase();
     if (!domain) return new Response(JSON.stringify({ ok: false, error: 'No domain' }), { status: 400, headers: corsHeaders });
     if (typeof TENANT_CONFIG !== 'undefined') {
-      await TENANT_CONFIG.put('fields:' + domain, JSON.stringify({
+      // Guardar por entidad: fields:domain:deal y fields:domain:lead
+      const key = 'fields:' + domain + ':' + entity;
+      await TENANT_CONFIG.put(key, JSON.stringify({
         destinos: body.destinos || '',
         pais: body.pais || '',
         region: body.region || ''
       }));
+      // Compatibilidad: también guardar en key legacy fields:domain para deal
+      if (entity === 'deal') {
+        await TENANT_CONFIG.put('fields:' + domain, JSON.stringify({
+          destinos: body.destinos || '',
+          pais: body.pais || '',
+          region: body.region || ''
+        }));
+      }
     }
     return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch(e) {
@@ -268,19 +284,25 @@ function renderSettingsPage(fieldCfg, domain) {
     '.hero-sub { color: rgba(255,255,255,0.7); font-size: 12px; margin-top: 6px; z-index: 1; letter-spacing: 1px; }' +
     '.hero-icon { font-size: 36px; margin-bottom: 8px; z-index: 1; }' +
     '.content { padding: 24px; }' +
+    // Tabs Deal/Lead
+    '.entity-tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 2px solid #eee; }' +
+    '.etab { padding: 8px 24px; font-size: 13px; font-weight: 600; color: #888; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all .15s; }' +
+    '.etab.active { color: #5b6cf6; border-bottom-color: #5b6cf6; }' +
+    '.etab:hover { color: #5b6cf6; }' +
     'h3 { font-size: 14px; font-weight: 600; color: #555; margin-bottom: 16px; text-transform: uppercase; letter-spacing: .5px; }' +
     '.srow { margin-bottom: 14px; }' +
     '.srow label { display: block; font-size: 12px; color: #666; margin-bottom: 5px; font-weight: 500; }' +
-    '.srow input { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; font-family: monospace; }' +
-    '.srow input:focus { outline: none; border-color: #5b6cf6; box-shadow: 0 0 0 2px rgba(91,108,246,.12); }' +
     '.btn-save { background: linear-gradient(135deg, #5b6cf6, #7c3aed); color: #fff; border: none; border-radius: 8px; padding: 12px 20px; font-size: 14px; font-weight: 600; cursor: pointer; width: 100%; margin-top: 8px; }' +
     '.btn-save:hover { opacity: 0.9; }' +
     '.btn-save:disabled { background: #bbb; cursor: not-allowed; }' +
     '#cfg-status { margin-top: 12px; font-size: 13px; text-align: center; min-height: 20px; padding: 8px; border-radius: 6px; }' +
     '.msg-ok { color: #2d9e5f; background: #f0faf5; }' +
     '.msg-err { color: #e05555; background: #fff5f5; }' +
-    '.divider { height: 1px; background: #f0f0f0; margin: 20px 0; }' +
     '.hint { font-size: 11px; color: #aaa; margin-top: 4px; }' +
+    // Dropdown styling con UF_ chico
+    '.field-select { width:100%; padding:8px 12px; border:1px solid #ddd; border-radius:8px; font-size:13px; background:#fff; }' +
+    '.opt-label { font-size: 13px; color: #333; }' +
+    '.opt-code { font-size: 10px; color: #aaa; }' +
     '</style></head><body>' +
 
     '<div class="hero">' +
@@ -295,21 +317,26 @@ function renderSettingsPage(fieldCfg, domain) {
     '</div>' +
 
     '<div class="content">' +
-    '<h3>Configuración de campos</h3>' +
+    // Tabs
+    '<div class="entity-tabs">' +
+    '<div class="etab active" id="tab-deal" onclick="switchEntity(\'deal\')">🤝 Deal</div>' +
+    '<div class="etab" id="tab-lead" onclick="switchEntity(\'lead\')">📋 Lead</div>' +
+    '</div>' +
+    '<h3 id="cfg-title">Configuración de campos — Deal</h3>' +
     '<div class="srow">' +
-    '<label>ID Campo Destinos / Ciudades</label>' +
-    '<input type="text" id="f-destinos" value="' + (fieldCfg.destinos||'') + '" placeholder="UF_CRM_XXXXXXXXXX">' +
-    '<div class="hint">Campo tipo string múltiple en el Deal</div>' +
+    '<label>Campo Destinos / Ciudades</label>' +
+    '<select class="field-select" id="f-destinos"><option value="">Cargando...</option></select>' +
+    '<div class="hint">Campo tipo string múltiple</div>' +
     '</div>' +
     '<div class="srow">' +
-    '<label>ID Campo País</label>' +
-    '<input type="text" id="f-pais" value="' + (fieldCfg.pais||'') + '" placeholder="UF_CRM_XXXXXXXXXX">' +
-    '<div class="hint">Campo tipo string múltiple en el Deal</div>' +
+    '<label>Campo País</label>' +
+    '<select class="field-select" id="f-pais"><option value="">Cargando...</option></select>' +
+    '<div class="hint">Campo tipo string múltiple</div>' +
     '</div>' +
     '<div class="srow">' +
-    '<label>ID Campo Región</label>' +
-    '<input type="text" id="f-region" value="' + (fieldCfg.region||'') + '" placeholder="UF_CRM_XXXXXXXXXX">' +
-    '<div class="hint">Campo tipo string múltiple en el Deal</div>' +
+    '<label>Campo Región</label>' +
+    '<select class="field-select" id="f-region"><option value="">Cargando...</option></select>' +
+    '<div class="hint">Campo tipo string múltiple</div>' +
     '</div>' +
     '<button class="btn-save" onclick="saveConfig()" id="btn-save">Guardar configuración</button>' +
     '<div id="cfg-status"></div>' +
@@ -317,66 +344,80 @@ function renderSettingsPage(fieldCfg, domain) {
 
     '<script>' +
     'var WORKER_URL = "' + WORKER_URL + '";' +
-    'var FIELD_DESTINOS = "' + (fieldCfg.destinos||'') + '";' +
-    'var FIELD_PAIS = "' + (fieldCfg.pais||'') + '";' +
-    'var FIELD_REGION = "' + (fieldCfg.region||'') + '";' +
     'var DOMAIN = "' + domain + '";' +
+    'var currentEntity = "deal";' +
+    // Config por entidad: { deal: {destinos, pais, region}, lead: {destinos, pais, region} }
+    'var cfgByEntity = {' +
+    '  deal: { destinos: "' + (fieldCfg.destinos||'') + '", pais: "' + (fieldCfg.pais||'') + '", region: "' + (fieldCfg.region||'') + '" },' +
+    '  lead: { destinos: "' + (fieldCfg.lead_destinos||'') + '", pais: "' + (fieldCfg.lead_pais||'') + '", region: "' + (fieldCfg.lead_region||'') + '" }' +
+    '};' +
+    'var allFields = [];' +
+
     'BX24.init(function() {' +
     '  if (!DOMAIN) DOMAIN = String(BX24.getDomain ? BX24.getDomain() : "");' +
     '  loadFields();' +
     '});' +
     'setTimeout(function() {' +
-    '  if (document.querySelector("select#f-destinos")) return;' +
+    '  if (allFields.length) return;' +
     '  try { if (!DOMAIN && BX24.getDomain) DOMAIN = String(BX24.getDomain()); } catch(e) {}' +
     '  loadFields();' +
     '}, 1500);' +
+
+    'function switchEntity(entity) {' +
+    '  currentEntity = entity;' +
+    '  document.getElementById("tab-deal").className = "etab" + (entity==="deal"?" active":"");' +
+    '  document.getElementById("tab-lead").className = "etab" + (entity==="lead"?" active":"");' +
+    '  document.getElementById("cfg-title").textContent = "Configuración de campos — " + (entity==="deal"?"Deal":"Lead");' +
+    '  var cfg = cfgByEntity[entity] || {};' +
+    '  fillDropdown("f-destinos", allFields, cfg.destinos||"");' +
+    '  fillDropdown("f-pais", allFields, cfg.pais||"");' +
+    '  fillDropdown("f-region", allFields, cfg.region||"");' +
+    '}' +
+
     'function loadFields() {' +
     '  if (!DOMAIN) { console.warn("No DOMAIN"); return; }' +
     '  fetch(WORKER_URL + "/fields?domain=" + encodeURIComponent(DOMAIN))' +
     '  .then(function(r){ return r.json(); })' +
     '  .then(function(data) {' +
     '    if (!data.ok || !data.fields) { console.error("fields error", data); return; }' +
-    '    var ufFields = data.fields;' +
-    '    ufFields.sort(function(a,b){ return a.label.localeCompare(b.label); });' +
-    '    fillDropdown("f-destinos", ufFields, FIELD_DESTINOS);' +
-    '    fillDropdown("f-pais", ufFields, FIELD_PAIS);' +
-    '    fillDropdown("f-region", ufFields, FIELD_REGION);' +
+    '    allFields = data.fields.sort(function(a,b){ return a.label.localeCompare(b.label); });' +
+    '    var cfg = cfgByEntity[currentEntity] || {};' +
+    '    fillDropdown("f-destinos", allFields, cfg.destinos||"");' +
+    '    fillDropdown("f-pais", allFields, cfg.pais||"");' +
+    '    fillDropdown("f-region", allFields, cfg.region||"");' +
     '  })' +
-    '  .catch(function(e){ console.error("loadFields fetch error", e); });' +
+    '  .catch(function(e){ console.error("loadFields error", e); });' +
     '}' +
+
     'function fillDropdown(id, fields, currentVal) {' +
     '  var el = document.getElementById(id);' +
     '  if (!el) return;' +
-    '  var sel = document.createElement("select");' +
-    '  sel.id = id;' +
-    '  sel.style.cssText = "width:100%;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px;background:#fff";' +
-    '  var opt0 = document.createElement("option");' +
-    '  opt0.value = ""; opt0.textContent = "-- Selecciona un campo --";' +
-    '  sel.appendChild(opt0);' +
-    '  for (var i=0;i<fields.length;i++) {' +
-    '    var opt = document.createElement("option");' +
-    '    opt.value = fields[i].id;' +
-    '    opt.textContent = (fields[i].label || fields[i].title || fields[i].id) + " (" + fields[i].id + ")";' +
-    '    if (fields[i].id === currentVal) opt.selected = true;' +
-    '    sel.appendChild(opt);' +
+    '  var html = "<option value=\"\">-- Selecciona un campo --</option>";' +
+    '  for (var i=0; i<fields.length; i++) {' +
+    '    var f = fields[i];' +
+    '    var sel = f.id === currentVal ? " selected" : "";' +
+    // Label normal + UF_ en gris chico
+    '    html += "<option value=\"" + f.id + "\"" + sel + ">" + (f.label||f.id) + "  \u2014  " + f.id + "</option>";' +
     '  }' +
-    '  el.parentNode.replaceChild(sel, el);' +
+    '  el.innerHTML = html;' +
     '}' +
+
     'function saveConfig() {' +
     '  var d = document.getElementById("f-destinos").value.trim();' +
     '  var p = document.getElementById("f-pais").value.trim();' +
     '  var r = document.getElementById("f-region").value.trim();' +
     '  if (!d || !p || !r) { showStatus("Completa los 3 campos.", "err"); return; }' +
+    '  cfgByEntity[currentEntity] = { destinos: d, pais: p, region: r };' +
     '  var btn = document.getElementById("btn-save");' +
     '  btn.disabled = true; btn.textContent = "Guardando...";' +
     '  fetch(WORKER_URL + "/config", {' +
     '    method: "POST",' +
     '    headers: { "Content-Type": "application/json" },' +
-    '    body: JSON.stringify({ domain: DOMAIN, destinos: d, pais: p, region: r })' +
+    '    body: JSON.stringify({ domain: DOMAIN, entity: currentEntity, destinos: d, pais: p, region: r })' +
     '  }).then(function(res){ return res.json(); })' +
     '  .then(function(j) {' +
     '    btn.disabled = false; btn.textContent = "Guardar configuración";' +
-    '    if (j.ok) { showStatus("✓ Configuración guardada correctamente", "ok"); }' +
+    '    if (j.ok) { showStatus("✓ Guardado para " + (currentEntity==="deal"?"Deal":"Lead"), "ok"); }' +
     '    else { showStatus("Error: " + (j.error||""), "err"); }' +
     '  }).catch(function(e) {' +
     '    btn.disabled = false; btn.textContent = "Guardar configuración";' +
