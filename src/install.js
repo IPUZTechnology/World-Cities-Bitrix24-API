@@ -193,7 +193,7 @@ async function handleRequest(request) {
   function showDropdown(results,q) {
     var dd=document.getElementById('dropdown');
     if (!results.length) { dd.innerHTML='<div class="drop-empty">Sin resultados</div>'; dd.style.display='block'; return; }
-    dd.innerHTML=results.map(function(c){
+    dd.innerHTML=results.map(function(c,i){
       return '<div class="drop-item" onmousedown="selectCity(\''+esc(c.ciudad)+'\',\''+esc(c.pais)+'\',\''+esc(c.region)+'\')">' +
         '<div class="drop-city">'+highlight(c.ciudad,q)+'</div>' +
         '<div class="drop-meta">'+c.pais+' · '+c.region+'</div></div>';
@@ -223,6 +223,11 @@ async function handleRequest(request) {
   }
 
   function esc(s){return (s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'")}
+
+  function selectByIdx(idx) {
+    var c = allCities[idx];
+    if (c) selectCity(c.ciudad, c.pais, c.region);
+  }
 
   function selectCity(ciudad,pais,region) {
     closeDropdown();
