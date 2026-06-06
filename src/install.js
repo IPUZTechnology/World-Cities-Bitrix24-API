@@ -63,40 +63,30 @@ async function handleRequest(request, event) {
     const restBase = 'https://' + domain + '/rest/';
     const fieldsMethod = entity === 'lead' ? 'crm.lead.fields.json' : 'crm.deal.fields.json';
 
-    // Helper: refrescar token si el actual expiró
+    // Helper: refrescar token siempre (más confiable que verificar con profile)
     async function getValidToken() {
-      // Intentar con token actual primero
-      const testR = await fetch(restBase + 'profile.json?auth=' + encodeURIComponent(accessToken), { method: 'GET' });
-      const testD = await testR.json();
-      if (!testD?.error) return accessToken; // Token válido
-
-      // Token expirado → refrescar
-      if (!refreshToken) return accessToken;
       const B24_CLIENT_ID = (typeof CLIENT_ID !== 'undefined' ? CLIENT_ID : '') || '';
       const B24_CLIENT_SECRET = (typeof CLIENT_SECRET !== 'undefined' ? CLIENT_SECRET : '') || '';
-      if (!B24_CLIENT_ID || !B24_CLIENT_SECRET) {
-        console.error('refresh: CLIENT_ID o CLIENT_SECRET no definidos');
-        return accessToken;
-      }
+      if (!refreshToken || !B24_CLIENT_ID || !B24_CLIENT_SECRET) return accessToken;
       const refreshUrl = 'https://oauth.bitrix.info/oauth/token/?' +
         'grant_type=refresh_token&client_id=' + encodeURIComponent(B24_CLIENT_ID) +
         '&client_secret=' + encodeURIComponent(B24_CLIENT_SECRET) +
         '&refresh_token=' + encodeURIComponent(refreshToken);
-      console.log('refresh: calling', refreshUrl.replace(refreshToken, 'HIDDEN'));
-      const rr = await fetch(refreshUrl, { method: 'GET' });
-      const rd = await rr.json();
-      console.log('refresh result:', JSON.stringify(rd).substring(0, 200));
-      if (rd?.access_token) {
-        // Guardar nuevo token en KV
-        oauth.auth.access_token = rd.access_token;
-        oauth.auth.refresh_token = rd.refresh_token || refreshToken;
-        oauth.storedAt = new Date().toISOString();
-        if (typeof TENANT_CONFIG !== 'undefined') {
-          await TENANT_CONFIG.put('oauth:domain:' + domain, JSON.stringify(oauth)).catch(() => {});
+      try {
+        const rr = await fetch(refreshUrl, { method: 'GET' });
+        const rd = await rr.json();
+        if (rd?.access_token) {
+          oauth.auth.access_token = rd.access_token;
+          oauth.auth.refresh_token = rd.refresh_token || refreshToken;
+          oauth.storedAt = new Date().toISOString();
+          if (typeof TENANT_CONFIG !== 'undefined') {
+            await TENANT_CONFIG.put('oauth:domain:' + domain, JSON.stringify(oauth)).catch(() => {});
+          }
+          return rd.access_token;
         }
-        return rd.access_token;
-      }
-      return accessToken; // Fallback
+        console.error('refresh failed:', JSON.stringify(rd));
+      } catch(e) { console.error('refresh error', e); }
+      return accessToken;
     }
 
     try {
