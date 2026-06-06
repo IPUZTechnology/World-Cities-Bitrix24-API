@@ -123,13 +123,32 @@ async function handleRequest(request, event) {
 
   if (path === '/refresh' && request.method === 'GET') {
     const domain = String(url.searchParams.get('domain') || '').trim().toLowerCase();
-    const oauth = await getOAuth(domain);
+    const rawOauth = await TENANT_CONFIG.get('oauth:domain:' + domain).catch(() => null);
+    let oauth = null;
+    try { oauth = JSON.parse(rawOauth); } catch(e) {}
+    const refreshToken = oauth?.auth?.refresh_token;
+    const B24_CLIENT_ID = (typeof BITRIX_CLIENT_ID !== 'undefined' ? BITRIX_CLIENT_ID : '') || '';
+    const B24_CLIENT_SECRET = (typeof CLIENT_SECRET !== 'undefined' ? CLIENT_SECRET : '') || '';
+    let refreshResult = null;
+    if (refreshToken && B24_CLIENT_ID && B24_CLIENT_SECRET) {
+      try {
+        const rr = await fetch(
+          'https://oauth.bitrix.info/oauth/token/?grant_type=refresh_token' +
+          '&client_id=' + encodeURIComponent(B24_CLIENT_ID) +
+          '&client_secret=' + encodeURIComponent(B24_CLIENT_SECRET) +
+          '&refresh_token=' + encodeURIComponent(refreshToken),
+          { method: 'GET' }
+        );
+        refreshResult = await rr.json();
+      } catch(e) { refreshResult = { error: String(e) }; }
+    }
     return new Response(JSON.stringify({
       domain,
       storedAt: oauth?.storedAt,
-      hasToken: !!oauth?.auth?.access_token,
-      clientId: typeof BITRIX_CLIENT_ID !== 'undefined' ? 'OK:' + String(BITRIX_CLIENT_ID).substring(0,6) : 'MISSING',
-      clientSecret: typeof CLIENT_SECRET !== 'undefined' ? 'OK' : 'MISSING'
+      clientId: B24_CLIENT_ID ? 'OK:' + B24_CLIENT_ID.substring(0,8) : 'MISSING',
+      clientSecret: B24_CLIENT_SECRET ? 'OK' : 'MISSING',
+      hasRefreshToken: !!refreshToken,
+      refreshResult
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
