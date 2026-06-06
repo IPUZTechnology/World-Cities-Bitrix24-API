@@ -289,7 +289,6 @@ function renderSettingsPage(fieldCfg, domain) {
     '.hero-sub { color: rgba(255,255,255,0.7); font-size: 12px; margin-top: 6px; z-index: 1; letter-spacing: 1px; }' +
     '.hero-icon { font-size: 36px; margin-bottom: 8px; z-index: 1; }' +
     '.content { padding: 24px; }' +
-    // Tabs Deal/Lead
     '.entity-tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 2px solid #eee; }' +
     '.etab { padding: 8px 24px; font-size: 13px; font-weight: 600; color: #888; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all .15s; }' +
     '.etab.active { color: #5b6cf6; border-bottom-color: #5b6cf6; }' +
@@ -304,12 +303,8 @@ function renderSettingsPage(fieldCfg, domain) {
     '.msg-ok { color: #2d9e5f; background: #f0faf5; }' +
     '.msg-err { color: #e05555; background: #fff5f5; }' +
     '.hint { font-size: 11px; color: #aaa; margin-top: 4px; }' +
-    // Dropdown styling con UF_ chico
     '.field-select { width:100%; padding:8px 12px; border:1px solid #ddd; border-radius:8px; font-size:13px; background:#fff; }' +
-    '.opt-label { font-size: 13px; color: #333; }' +
-    '.opt-code { font-size: 10px; color: #aaa; }' +
     '</style></head><body>' +
-
     '<div class="hero">' +
     '<div class="hero-circles">' +
     '<div class="hero-circle" style="width:200px;height:200px;top:-50px;right:-50px"></div>' +
@@ -320,9 +315,7 @@ function renderSettingsPage(fieldCfg, domain) {
     '<div class="hero-title">DESTINOS</div>' +
     '<div class="hero-sub">World Cities · RIPUZ</div>' +
     '</div>' +
-
     '<div class="content">' +
-    // Tabs
     '<div class="entity-tabs">' +
     '<div class="etab active" id="tab-deal" onclick="switchEntity(\'deal\')">🤝 Deal</div>' +
     '<div class="etab" id="tab-lead" onclick="switchEntity(\'lead\')">📋 Lead</div>' +
