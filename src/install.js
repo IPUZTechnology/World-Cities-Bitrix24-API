@@ -42,6 +42,50 @@ async function handleRequest(request, event) {
     return handleConfigSave(request, corsHeaders);
   }
 
+  // ── FIELDS API — devuelve campos UF_ con labels reales ───
+  // GET /fields?domain=megatravel.bitrix24.co
+  if (path === '/fields' && request.method === 'GET') {
+    const domain = String(url.searchParams.get('domain') || url.searchParams.get('DOMAIN') || '').trim().toLowerCase();
+    if (!domain) return new Response(JSON.stringify({ ok: false, error: 'Falta domain' }), { status: 400, headers: corsHeaders });
+
+    let oauth = null;
+    if (typeof TENANT_CONFIG !== 'undefined') {
+      const raw = await TENANT_CONFIG.get('oauth:domain:' + domain).catch(() => null);
+      if (raw) { try { oauth = JSON.parse(raw); } catch(e) {} }
+    }
+    if (!oauth?.auth?.access_token) {
+      return new Response(JSON.stringify({ ok: false, error: 'OAuth no encontrado para ' + domain }), { status: 404, headers: corsHeaders });
+    }
+
+    const accessToken = oauth.auth.access_token;
+    const restBase = 'https://' + domain + '/rest/';
+
+    try {
+      // Llamar crm.userfield.list con OAuth del Worker (tiene permisos completos)
+      const r = await fetch(restBase + 'crm.userfield.list.json?auth=' + encodeURIComponent(accessToken), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order: { FIELD_NAME: 'ASC' }, filter: { ENTITY_ID: 'CRM_DEAL' } })
+      });
+      const data = await r.json();
+      const items = data?.result || [];
+
+      const fields = items.map(f => {
+        const lbl = f.EDIT_FORM_LABEL || f.LIST_COLUMN_LABEL || {};
+        const label = typeof lbl === 'object'
+          ? (lbl['es'] || lbl['en'] || lbl[Object.keys(lbl)[0]] || f.FIELD_NAME)
+          : String(lbl || f.FIELD_NAME);
+        return { id: f.FIELD_NAME, label: label.trim() || f.FIELD_NAME };
+      });
+
+      return new Response(JSON.stringify({ ok: true, fields }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    } catch(e) {
+      return new Response(JSON.stringify({ ok: false, error: String(e) }), { status: 500, headers: corsHeaders });
+    }
+  }
+
   // ── MAIN HANDLER (install + widget) ─────────────────────
   if (path === '' || path === '/' || path === '/install') {
     if (request.method === 'POST') {
@@ -261,36 +305,24 @@ function renderSettingsPage(fieldCfg, domain) {
     '  if (!DOMAIN) DOMAIN = String(BX24.getDomain ? BX24.getDomain() : "");' +
     '  loadFields();' +
     '});' +
-    // Fallback: si BX24.init no dispara en 1.5s, intentar loadFields igual
     'setTimeout(function() {' +
-    '  if (document.querySelector("select#f-destinos, select#f-pais, select#f-region")) return;' +
+    '  if (document.querySelector("select#f-destinos")) return;' +
     '  try { if (!DOMAIN && BX24.getDomain) DOMAIN = String(BX24.getDomain()); } catch(e) {}' +
     '  loadFields();' +
     '}, 1500);' +
     'function loadFields() {' +
-    '  BX24.callMethod("crm.deal.fields", {}, function(r) {' +
-    '    if (r.error()) { console.error("fields error", r.error()); return; }' +
-    '    var fields = r.data();' +
-    '    var ufFields = [];' +
-    '    for (var key in fields) {' +
-    '      if (key.indexOf("UF_CRM") !== 0) continue;' +
-    '      var f = fields[key];' +
-    '      // Buscar label en todas las propiedades disponibles' +
-    '      var label = "";' +
-    '      var tries = ["listLabel","editFormLabel","title","formLabel","filterLabel"];' +
-    '      for (var t = 0; t < tries.length; t++) {' +
-    '        var v = f[tries[t]];' +
-    '        if (v && typeof v === "object") v = v["es"] || v["en"] || v[Object.keys(v)[0]] || "";' +
-    '        if (v && String(v).trim() && String(v).trim() !== key) { label = String(v).trim(); break; }' +
-    '      }' +
-    '      if (!label) label = key;' +
-    '      ufFields.push({ id: key, title: label });' +
-    '    }' +
-    '    ufFields.sort(function(a,b){ return a.title.localeCompare(b.title); });' +
+    '  if (!DOMAIN) { console.warn("No DOMAIN"); return; }' +
+    '  fetch(WORKER_URL + "/fields?domain=" + encodeURIComponent(DOMAIN))' +
+    '  .then(function(r){ return r.json(); })' +
+    '  .then(function(data) {' +
+    '    if (!data.ok || !data.fields) { console.error("fields error", data); return; }' +
+    '    var ufFields = data.fields;' +
+    '    ufFields.sort(function(a,b){ return a.label.localeCompare(b.label); });' +
     '    fillDropdown("f-destinos", ufFields, FIELD_DESTINOS);' +
     '    fillDropdown("f-pais", ufFields, FIELD_PAIS);' +
     '    fillDropdown("f-region", ufFields, FIELD_REGION);' +
-    '  });' +
+    '  })' +
+    '  .catch(function(e){ console.error("loadFields fetch error", e); });' +
     '}' +
     'function fillDropdown(id, fields, currentVal) {' +
     '  var el = document.getElementById(id);' +
@@ -304,7 +336,7 @@ function renderSettingsPage(fieldCfg, domain) {
     '  for (var i=0;i<fields.length;i++) {' +
     '    var opt = document.createElement("option");' +
     '    opt.value = fields[i].id;' +
-    '    opt.textContent = fields[i].title + " (" + fields[i].id + ")";' +
+    '    opt.textContent = (fields[i].label || fields[i].title || fields[i].id) + " (" + fields[i].id + ")";' +
     '    if (fields[i].id === currentVal) opt.selected = true;' +
     '    sel.appendChild(opt);' +
     '  }' +
