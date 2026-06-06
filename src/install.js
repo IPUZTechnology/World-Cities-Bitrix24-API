@@ -1,6 +1,5 @@
 const CITIES_URL = 'https://world-cities-bitrix24-api.pages.dev/src/cities.json';
 const WORKER_URL = 'https://world-cities-bitrix24.ripuz.workers.dev';
-
 // ── Refresh OAuth global — llamar antes de cualquier llamada a Bitrix ─────────
 async function refreshOAuth(domain, oauth) {
   const refreshToken = oauth?.auth?.refresh_token;
