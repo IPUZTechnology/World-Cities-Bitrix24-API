@@ -165,7 +165,6 @@ async function handleRequest(request, event) {
       const domain = domainBody || domainQS;
       const authToken = fdPeek ? String(fdPeek.get('auth[access_token]') || fdPeek.get('ACCESS_TOKEN') || fdPeek.get('access_token') || '').trim() : '';
 
-      // LOG para diagnóstico
       console.log('POST_DEBUG', JSON.stringify({ placement, domain, authToken: authToken.substring(0,10), allKeys: fdPeek ? [...fdPeek.keys()] : [] }));
 
       // DEBUG - mostrar placement recibido
@@ -204,7 +203,6 @@ async function handleRequest(request, event) {
       }
 
       // Instalación real — Bitrix manda auth[access_token] o ACCESS_TOKEN
-      const authToken = fdPeek ? String(fdPeek.get('auth[access_token]') || fdPeek.get('ACCESS_TOKEN') || fdPeek.get('access_token') || '').trim() : '';
       const isInstall = authToken && authToken.length > 10;
 
       // Instalación real — solo si trae access_token válido
