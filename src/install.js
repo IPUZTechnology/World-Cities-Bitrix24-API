@@ -167,7 +167,7 @@ async function handleRequest(request, event) {
 
       const status = fdPeek ? String(fdPeek.get('status') || '').trim().toUpperCase() : '';
       console.log('POST_DEBUG', JSON.stringify({ placement, domain, authToken: authToken.substring(0,10), status, allKeys: fdPeek ? [...fdPeek.keys()] : [] }));
-      const isInstall = authToken && authToken.length > 10 && status === 'L';
+      const isInstall = authToken && authToken.length > 10 && (status === 'F' || status === 'L');
 
       // Instalación real
       if (isInstall) return handleInstall(request, event, url, corsHeaders, fdPeek);
