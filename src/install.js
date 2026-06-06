@@ -163,7 +163,7 @@ async function handleRequest(request, event) {
       const domainQS = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
       const domainBody = fdPeek ? String(fdPeek.get('DOMAIN') || fdPeek.get('domain') || '').trim().toLowerCase() : '';
       const domain = domainBody || domainQS;
-      const authToken = fdPeek ? String(fdPeek.get('auth[access_token]') || fdPeek.get('ACCESS_TOKEN') || fdPeek.get('access_token') || '').trim() : '';
+      const authToken = fdPeek ? String(fdPeek.get('AUTH_ID') || fdPeek.get('auth[access_token]') || fdPeek.get('access_token') || '').trim() : '';
 
       console.log('POST_DEBUG', JSON.stringify({ placement, domain, authToken: authToken.substring(0,10), allKeys: fdPeek ? [...fdPeek.keys()] : [] }));
 
@@ -238,9 +238,9 @@ async function handleInstall(request, event, url, corsHeaders, fd) {
     if (!fd) return new Response(renderWelcomePage(), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' } });
 
     const domain = String(fd.get('DOMAIN') || fd.get('domain') || url.searchParams.get('DOMAIN') || '').trim().toLowerCase();
-    const accessToken = String(fd.get('auth[access_token]') || fd.get('access_token') || fd.get('AUTH_ID') || '').trim();
-    const refreshToken = String(fd.get('auth[refresh_token]') || fd.get('refresh_token') || fd.get('REFRESH_ID') || '').trim();
-    const serverEndpoint = String(fd.get('server_endpoint') || fd.get('SERVER_ENDPOINT') || '').trim();
+    const accessToken = String(fd.get('AUTH_ID') || fd.get('auth[access_token]') || fd.get('access_token') || '').trim();
+    const refreshToken = String(fd.get('REFRESH_ID') || fd.get('auth[refresh_token]') || fd.get('refresh_token') || '').trim();
+    const serverEndpoint = String(fd.get('SERVER_ENDPOINT') || fd.get('server_endpoint') || '').trim();
 
     // DEBUG temporal — ver qué campos manda Bitrix en el install
     const allKeys = [];
