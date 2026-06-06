@@ -118,6 +118,18 @@ async function handleRequest(request, event) {
     }
   }
 
+  if (path === '/refresh' && request.method === 'GET') {
+    const domain = String(url.searchParams.get('domain') || '').trim().toLowerCase();
+    const oauth = await getOAuth(domain);
+    return new Response(JSON.stringify({
+      domain,
+      storedAt: oauth?.storedAt,
+      hasToken: !!oauth?.auth?.access_token,
+      clientId: typeof CLIENT_ID !== 'undefined' ? 'OK:' + String(CLIENT_ID).substring(0,6) : 'MISSING',
+      clientSecret: typeof CLIENT_SECRET !== 'undefined' ? 'OK' : 'MISSING'
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
   // ── MAIN HANDLER (install + widget) ─────────────────────
   if (path === '' || path === '/' || path === '/install') {
     if (request.method === 'POST') {
