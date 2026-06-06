@@ -1,7 +1,5 @@
-// World Cities - Bitrix24 Widget Worker
-// Patron basado en Convertalk install handler
-
 const CITIES_URL = 'https://world-cities-bitrix24-api.pages.dev/src/cities.json';
+const WORKER_URL = 'https://world-cities-bitrix24.ripuz.workers.dev';
 
 addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request, event));
@@ -21,30 +19,39 @@ async function handleRequest(request, event) {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
-  // Servir cities.json
   if (path.includes('cities.json')) {
     return fetch(CITIES_URL);
   }
 
-  // ── INSTALL / WIDGET HANDLER ────────────────────────────
-  if (path === '/install' || path === '' || path === '/') {
+  // ── CONFIG SAVE API ──────────────────────────────────────
+  if (path === '/config' && request.method === 'POST') {
+    return handleConfigSave(request, corsHeaders);
+  }
+
+  // ── MAIN HANDLER (install + widget) ─────────────────────
+  if (path === '' || path === '/' || path === '/install') {
     if (request.method === 'POST') {
-      // Leer formData para detectar si es placement o instalacion
       const fdPeek = await request.clone().formData().catch(() => null);
       const placement = fdPeek ? String(fdPeek.get('PLACEMENT') || fdPeek.get('placement') || '').trim() : '';
-      
-      // Si viene PLACEMENT → es el widget cargando en el Deal
-      if (placement && (placement.includes('DEAL') || placement.includes('LEAD'))) {
-        const domain = String(
-          fdPeek.get('DOMAIN') || fdPeek.get('domain') ||
-          url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || ''
-        ).trim().toLowerCase();
-        const entityId = String(
-          fdPeek.get('PLACEMENT_OPTIONS') ? 
-          JSON.parse(fdPeek.get('PLACEMENT_OPTIONS') || '{}').ID || '' : ''
-        ).trim();
+      const domain = fdPeek ? String(fdPeek.get('DOMAIN') || fdPeek.get('domain') || url.searchParams.get('DOMAIN') || '').trim().toLowerCase() : '';
+
+      // LEFT_MENU → settings panel
+      if (placement === 'LEFT_MENU') {
         let fieldCfg = { destinos: '', pais: '', region: '' };
-        if (TENANT_CONFIG && domain) {
+        if (typeof TENANT_CONFIG !== 'undefined' && domain) {
+          const raw = await TENANT_CONFIG.get('fields:' + domain).catch(() => null);
+          if (raw) { try { fieldCfg = JSON.parse(raw); } catch(e) {} }
+        }
+        return new Response(renderSettingsPage(fieldCfg, domain), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
+        });
+      }
+
+      // Deal/Lead → widget
+      if (placement && (placement.includes('DEAL') || placement.includes('LEAD'))) {
+        let fieldCfg = { destinos: '', pais: '', region: '' };
+        if (typeof TENANT_CONFIG !== 'undefined' && domain) {
           const raw = await TENANT_CONFIG.get('fields:' + domain).catch(() => null);
           if (raw) { try { fieldCfg = JSON.parse(raw); } catch(e) {} }
         }
@@ -53,200 +60,194 @@ async function handleRequest(request, event) {
           headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
         });
       }
-      
-      // Si no viene PLACEMENT → es instalacion real
-      return handleInstall(request, event, url, corsHeaders);
+
+      // Instalación real
+      return handleInstall(request, event, url, corsHeaders, fdPeek);
     }
-    // GET → servir pagina de bienvenida
+
     return new Response(renderWelcomePage(), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
     });
   }
 
-  // ── WIDGET HANDLER ───────────────────────────────────────
-  // Bitrix llama este endpoint cuando abre el placement en el Deal
-  if (path === '/widget') {
-    return handleWidget(request, url, corsHeaders);
-  }
-
-  // ── CONFIG HANDLER ───────────────────────────────────────
-  if (path === '/config') {
-    return handleConfig(request, url, corsHeaders);
-  }
-
   return new Response('Not found', { status: 404 });
 }
 
 // ── INSTALL ──────────────────────────────────────────────
-async function handleInstall(request, event, url, corsHeaders) {
+async function handleInstall(request, event, url, corsHeaders, fd) {
   try {
-    const fd = await request.formData();
+    if (!fd) fd = await request.formData().catch(() => null);
+    if (!fd) return new Response(renderWelcomePage(), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' } });
 
-    const domain = String(
-      fd.get('DOMAIN') || fd.get('domain') ||
-      url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || ''
-    ).trim().toLowerCase();
-
-    const accessToken = String(
-      fd.get('auth[access_token]') ||
-      fd.get('access_token') ||
-      fd.get('AUTH_ID') || ''
-    ).trim();
-
-    const refreshToken = String(
-      fd.get('auth[refresh_token]') ||
-      fd.get('refresh_token') ||
-      fd.get('REFRESH_ID') || ''
-    ).trim();
-
+    const domain = String(fd.get('DOMAIN') || fd.get('domain') || url.searchParams.get('DOMAIN') || '').trim().toLowerCase();
+    const accessToken = String(fd.get('auth[access_token]') || fd.get('access_token') || fd.get('AUTH_ID') || '').trim();
+    const refreshToken = String(fd.get('auth[refresh_token]') || fd.get('refresh_token') || fd.get('REFRESH_ID') || '').trim();
     const serverEndpoint = String(fd.get('server_endpoint') || fd.get('SERVER_ENDPOINT') || '').trim();
 
-    // Derivar tenant del dominio (megatravel.bitrix24.co → megatravel)
-    let tenant = '';
     const m = domain.match(/^([a-z0-9-]+)\.bitrix24\.[a-z]{2,}$/i);
-    tenant = (m && m[1]) ? m[1].toLowerCase() : domain.toLowerCase();
+    const tenant = (m && m[1]) ? m[1].toLowerCase() : domain.toLowerCase();
 
-    // Guardar OAuth en KV
-    if (accessToken && TENANT_CONFIG) {
+    if (accessToken && typeof TENANT_CONFIG !== 'undefined') {
       const record = {
         storedAt: new Date().toISOString(),
-        tenant,
-        domain: domain || null,
-        auth: {
-          access_token: accessToken,
-          refresh_token: refreshToken || null,
-          domain: domain || null,
-          server_endpoint: serverEndpoint || null,
-        }
+        tenant, domain: domain || null,
+        auth: { access_token: accessToken, refresh_token: refreshToken || null, domain: domain || null, server_endpoint: serverEndpoint || null }
       };
       event.waitUntil(TENANT_CONFIG.put('oauth:tenant:' + tenant, JSON.stringify(record)));
       if (domain) {
         event.waitUntil(TENANT_CONFIG.put('oauth:domain:' + domain, JSON.stringify(record)));
         event.waitUntil(TENANT_CONFIG.put('tenant_domain:' + domain, tenant));
       }
-
-      // Registrar placements via REST
-      const origin = new URL(request.url).origin;
-      const widgetUrl = origin + '/widget';
-      const restBase = 'https://' + domain + '/rest/';
-
-      event.waitUntil(bindPlacements(restBase, accessToken, widgetUrl));
+      event.waitUntil(bindPlacements(domain, accessToken));
     }
 
-    // Responder con HTML de confirmacion (Bitrix lo muestra en popup)
     return new Response(renderInstallSuccess(tenant, domain), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
     });
-
-  } catch (e) {
-    return new Response(renderInstallError(String(e)), {
-      status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
-    });
+  } catch(e) {
+    return new Response('<h3>Error: ' + String(e) + '</h3>', { status: 200, headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' } });
   }
 }
 
-async function bindPlacements(restBase, accessToken, widgetUrl) {
-  const placements = ['CRM_DEAL_DETAIL_TAB', 'CRM_LEAD_DETAIL_TAB'];
-  for (const placement of placements) {
+async function bindPlacements(domain, accessToken) {
+  const restBase = 'https://' + domain + '/rest/';
+  const placements = [
+    { placement: 'CRM_DEAL_DETAIL_TAB', title: 'Destinos' },
+    { placement: 'CRM_LEAD_DETAIL_TAB', title: 'Destinos' },
+    { placement: 'LEFT_MENU', title: 'Destinos Config' }
+  ];
+  for (const p of placements) {
     try {
       await fetch(restBase + 'placement.bind.json?auth=' + encodeURIComponent(accessToken), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          PLACEMENT: placement,
-          HANDLER: widgetUrl,
-          TITLE: 'Destinos',
-          DESCRIPTION: 'Buscar ciudades del mundo'
-        })
+        body: JSON.stringify({ PLACEMENT: p.placement, HANDLER: WORKER_URL, TITLE: p.title })
       });
     } catch(e) {}
   }
 }
 
-// ── WIDGET ───────────────────────────────────────────────
-async function handleWidget(request, url, corsHeaders) {
-  const domain = String(
-    url.searchParams.get('DOMAIN') ||
-    url.searchParams.get('domain') || ''
-  ).trim().toLowerCase();
-
-  // Obtener config de campos UF desde KV
-  let fieldCfg = { destinos: '', pais: '', region: '' };
-  if (TENANT_CONFIG && domain) {
-    const raw = await TENANT_CONFIG.get('fields:' + domain);
-    if (raw) {
-      try { fieldCfg = JSON.parse(raw); } catch(e) {}
-    }
-  }
-
-  return new Response(renderWidget(fieldCfg, domain), {
-    status: 200,
-    headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
-  });
-}
-
 // ── CONFIG SAVE ──────────────────────────────────────────
-async function handleConfig(request, url, corsHeaders) {
-  if (request.method !== 'POST') {
-    return new Response('Method not allowed', { status: 405 });
-  }
+async function handleConfigSave(request, corsHeaders) {
   try {
     const body = await request.json();
     const domain = String(body.domain || '').trim().toLowerCase();
-    if (!domain) return new Response(JSON.stringify({ ok: false, error: 'No domain' }), { status: 400 });
-
-    if (TENANT_CONFIG) {
+    if (!domain) return new Response(JSON.stringify({ ok: false, error: 'No domain' }), { status: 400, headers: corsHeaders });
+    if (typeof TENANT_CONFIG !== 'undefined') {
       await TENANT_CONFIG.put('fields:' + domain, JSON.stringify({
         destinos: body.destinos || '',
         pais: body.pais || '',
         region: body.region || ''
       }));
     }
-    return new Response(JSON.stringify({ ok: true }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    });
+    return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch(e) {
-    return new Response(JSON.stringify({ ok: false, error: String(e) }), { status: 500 });
+    return new Response(JSON.stringify({ ok: false, error: String(e) }), { status: 500, headers: corsHeaders });
   }
 }
 
-// ── HTML TEMPLATES ───────────────────────────────────────
-function renderInstallSuccess(tenant, domain) {
+// ── SETTINGS PAGE (LEFT_MENU) ────────────────────────────
+function renderSettingsPage(fieldCfg, domain) {
   return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
     '<script src="//api.bitrix24.com/api/v1/"><\/script>' +
-    '<style>body{font-family:Arial,sans-serif;padding:30px;text-align:center}' +
-    '.ok{color:#2d9e5f;font-size:18px;font-weight:600}' +
-    'p{color:#666;font-size:13px;margin-top:8px}</style></head><body>' +
-    '<div class="ok">Destinos instalado correctamente</div>' +
-    '<p>Portal: ' + domain + '</p>' +
-    '<p>Abre un Deal y busca la pestana Destinos.</p>' +
-    '<script>BX24.init(function(){ setTimeout(function(){ BX24.closeApplication(); }, 3000); });<\/script>' +
-    '</body></html>';
+    '<style>' +
+    '* { box-sizing: border-box; margin: 0; padding: 0; }' +
+    'body { font-family: Arial, sans-serif; font-size: 14px; color: #333; background: #fff; }' +
+    '.hero { width: 100%; height: 180px; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 40%, #0f3460 70%, #533483 100%); display: flex; align-items: center; justify-content: center; flex-direction: column; position: relative; overflow: hidden; }' +
+    '.hero-circles { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }' +
+    '.hero-circle { position: absolute; border-radius: 50%; border: 1px solid rgba(255,255,255,0.1); }' +
+    '.hero-title { color: #fff; font-size: 22px; font-weight: 700; letter-spacing: 2px; z-index: 1; }' +
+    '.hero-sub { color: rgba(255,255,255,0.7); font-size: 12px; margin-top: 6px; z-index: 1; letter-spacing: 1px; }' +
+    '.hero-icon { font-size: 36px; margin-bottom: 8px; z-index: 1; }' +
+    '.content { padding: 24px; }' +
+    'h3 { font-size: 14px; font-weight: 600; color: #555; margin-bottom: 16px; text-transform: uppercase; letter-spacing: .5px; }' +
+    '.srow { margin-bottom: 14px; }' +
+    '.srow label { display: block; font-size: 12px; color: #666; margin-bottom: 5px; font-weight: 500; }' +
+    '.srow input { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; font-family: monospace; }' +
+    '.srow input:focus { outline: none; border-color: #5b6cf6; box-shadow: 0 0 0 2px rgba(91,108,246,.12); }' +
+    '.btn-save { background: linear-gradient(135deg, #5b6cf6, #7c3aed); color: #fff; border: none; border-radius: 8px; padding: 12px 20px; font-size: 14px; font-weight: 600; cursor: pointer; width: 100%; margin-top: 8px; }' +
+    '.btn-save:hover { opacity: 0.9; }' +
+    '.btn-save:disabled { background: #bbb; cursor: not-allowed; }' +
+    '#cfg-status { margin-top: 12px; font-size: 13px; text-align: center; min-height: 20px; padding: 8px; border-radius: 6px; }' +
+    '.msg-ok { color: #2d9e5f; background: #f0faf5; }' +
+    '.msg-err { color: #e05555; background: #fff5f5; }' +
+    '.divider { height: 1px; background: #f0f0f0; margin: 20px 0; }' +
+    '.hint { font-size: 11px; color: #aaa; margin-top: 4px; }' +
+    '</style></head><body>' +
+
+    '<div class="hero">' +
+    '<div class="hero-circles">' +
+    '<div class="hero-circle" style="width:200px;height:200px;top:-50px;right:-50px"></div>' +
+    '<div class="hero-circle" style="width:120px;height:120px;bottom:-30px;left:30px"></div>' +
+    '<div class="hero-circle" style="width:80px;height:80px;top:20px;left:60px"></div>' +
+    '</div>' +
+    '<div class="hero-icon">🌍</div>' +
+    '<div class="hero-title">DESTINOS</div>' +
+    '<div class="hero-sub">World Cities · RIPUZ</div>' +
+    '</div>' +
+
+    '<div class="content">' +
+    '<h3>Configuración de campos</h3>' +
+    '<div class="srow">' +
+    '<label>ID Campo Destinos / Ciudades</label>' +
+    '<input type="text" id="f-destinos" value="' + (fieldCfg.destinos||'') + '" placeholder="UF_CRM_XXXXXXXXXX">' +
+    '<div class="hint">Campo tipo string múltiple en el Deal</div>' +
+    '</div>' +
+    '<div class="srow">' +
+    '<label>ID Campo País</label>' +
+    '<input type="text" id="f-pais" value="' + (fieldCfg.pais||'') + '" placeholder="UF_CRM_XXXXXXXXXX">' +
+    '<div class="hint">Campo tipo string múltiple en el Deal</div>' +
+    '</div>' +
+    '<div class="srow">' +
+    '<label>ID Campo Región</label>' +
+    '<input type="text" id="f-region" value="' + (fieldCfg.region||'') + '" placeholder="UF_CRM_XXXXXXXXXX">' +
+    '<div class="hint">Campo tipo string múltiple en el Deal</div>' +
+    '</div>' +
+    '<button class="btn-save" onclick="saveConfig()" id="btn-save">Guardar configuración</button>' +
+    '<div id="cfg-status"></div>' +
+    '</div>' +
+
+    '<script>' +
+    'var WORKER_URL = "' + WORKER_URL + '";' +
+    'var DOMAIN = "' + domain + '";' +
+    'BX24.init(function() {' +
+    '  if (!DOMAIN) DOMAIN = String(BX24.getDomain ? BX24.getDomain() : "");' +
+    '});' +
+    'function saveConfig() {' +
+    '  var d = document.getElementById("f-destinos").value.trim();' +
+    '  var p = document.getElementById("f-pais").value.trim();' +
+    '  var r = document.getElementById("f-region").value.trim();' +
+    '  if (!d || !p || !r) { showStatus("Completa los 3 campos.", "err"); return; }' +
+    '  var btn = document.getElementById("btn-save");' +
+    '  btn.disabled = true; btn.textContent = "Guardando...";' +
+    '  fetch(WORKER_URL + "/config", {' +
+    '    method: "POST",' +
+    '    headers: { "Content-Type": "application/json" },' +
+    '    body: JSON.stringify({ domain: DOMAIN, destinos: d, pais: p, region: r })' +
+    '  }).then(function(res){ return res.json(); })' +
+    '  .then(function(j) {' +
+    '    btn.disabled = false; btn.textContent = "Guardar configuración";' +
+    '    if (j.ok) { showStatus("✓ Configuración guardada correctamente", "ok"); }' +
+    '    else { showStatus("Error: " + (j.error||""), "err"); }' +
+    '  }).catch(function(e) {' +
+    '    btn.disabled = false; btn.textContent = "Guardar configuración";' +
+    '    showStatus("Error de conexión", "err");' +
+    '  });' +
+    '}' +
+    'function showStatus(msg, type) {' +
+    '  var el = document.getElementById("cfg-status");' +
+    '  el.textContent = msg;' +
+    '  el.className = type === "ok" ? "msg-ok" : "msg-err";' +
+    '}' +
+    '<\/script></body></html>';
 }
 
-function renderInstallError(err) {
-  return '<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body>' +
-    '<p style="color:red">Error en instalacion: ' + err + '</p>' +
-    '</body></html>';
-}
-
-function renderWelcomePage() {
-  return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
-    '<style>body{font-family:Arial,sans-serif;padding:40px;text-align:center;color:#333}' +
-    'h2{color:#5b6cf6}</style></head><body>' +
-    '<h2>Destinos / World Cities</h2>' +
-    '<p>Widget de busqueda de ciudades para Bitrix24</p>' +
-    '<p style="color:#888;font-size:12px">by RIPUZ</p>' +
-    '</body></html>';
-}
-
+// ── WIDGET (Deal/Lead tab) ───────────────────────────────
 function renderWidget(fieldCfg, domain, placement) {
   placement = placement || '';
-  const WORKER_URL = 'https://world-cities-bitrix24.ripuz.workers.dev';
-
   return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
     '<meta name="viewport" content="width=device-width,initial-scale=1">' +
     '<script src="//api.bitrix24.com/api/v1/"><\/script>' +
@@ -254,17 +255,9 @@ function renderWidget(fieldCfg, domain, placement) {
     '* { box-sizing: border-box; margin: 0; padding: 0; }' +
     'body { font-family: Arial, sans-serif; font-size: 14px; color: #333; background: #fff; padding: 12px; }' +
     '#loading { text-align: center; padding: 20px; color: #aaa; font-size: 13px; }' +
-    '.srow { margin-bottom: 10px; }' +
-    '.srow label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }' +
-    '.srow input { width: 100%; padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; }' +
-    '.btn-blue { background: #5b6cf6; color: #fff; border: none; border-radius: 8px; padding: 9px 20px; font-size: 13px; font-weight: 600; cursor: pointer; width: 100%; margin-top: 4px; }' +
-    '.btn-blue:disabled { background: #bbb; cursor: not-allowed; }' +
-    '.w-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }' +
-    '.w-title { font-size: 13px; font-weight: 600; color: #444; }' +
-    '.btn-cfg { background: none; border: none; cursor: pointer; color: #aaa; font-size: 13px; padding: 2px 4px; }' +
     '.sw { position: relative; margin-bottom: 4px; }' +
     '.sw input { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; }' +
-    '.sw input:focus { outline: none; border-color: #5b6cf6; }' +
+    '.sw input:focus { outline: none; border-color: #5b6cf6; box-shadow: 0 0 0 2px rgba(91,108,246,.12); }' +
     '#dropdown { display: none; position: absolute; z-index: 9999; background: #fff; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.1); max-height: 200px; overflow-y: auto; width: 100%; margin-top: 4px; }' +
     '.di { padding: 8px 12px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #f0f0f0; }' +
     '.di:last-child { border-bottom: none; }' +
@@ -274,13 +267,13 @@ function renderWidget(fieldCfg, domain, placement) {
     '.de { padding: 12px; text-align: center; color: #aaa; font-size: 12px; }' +
     '#tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; min-height: 4px; }' +
     '.tag { display: flex; align-items: center; gap: 5px; background: #eef0ff; border: 1px solid #c5caff; border-radius: 20px; padding: 4px 10px; font-size: 12px; color: #3a47c9; }' +
-    '.tag span { max-width: 140px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }' +
-    '.tr { cursor: pointer; color: #8891e0; font-size: 14px; line-height: 1; }' +
+    '.tag span { max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }' +
+    '.tr { cursor: pointer; color: #8891e0; font-size: 14px; line-height: 1; margin-left: 2px; }' +
     '.tr:hover { color: #e05555; }' +
-    '#btn-apply { display: none; margin-top: 12px; width: 100%; padding: 9px; background: #5b6cf6; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }' +
+    '#btn-apply { display: none; margin-top: 12px; width: 100%; padding: 10px; background: linear-gradient(135deg, #5b6cf6, #7c3aed); color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }' +
     '#btn-apply:disabled { background: #bbb; cursor: not-allowed; }' +
     '#status-msg { margin-top: 8px; font-size: 12px; text-align: center; min-height: 16px; }' +
-    '#cfg-panel { display: none; background: #f7f7f7; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 12px; }' +
+    '.no-cfg { font-size: 12px; color: #e05555; margin-top: 8px; text-align: center; }' +
     '.msg-ok { color: #2d9e5f; } .msg-err { color: #e05555; } .msg-info { color: #5b6cf6; }' +
     '</style></head><body>' +
     '<div id="loading">Iniciando...</div>' +
@@ -288,16 +281,15 @@ function renderWidget(fieldCfg, domain, placement) {
     '<script>' +
     'var CITIES_URL = "' + CITIES_URL + '";' +
     'var WORKER_URL = "' + WORKER_URL + '";' +
-    'var FIELD_DESTINOS = "' + fieldCfg.destinos + '";' +
-    'var FIELD_PAIS = "' + fieldCfg.pais + '";' +
-    'var FIELD_REGION = "' + fieldCfg.region + '";' +
+    'var FIELD_DESTINOS = "' + (fieldCfg.destinos||'') + '";' +
+    'var FIELD_PAIS = "' + (fieldCfg.pais||'') + '";' +
+    'var FIELD_REGION = "' + (fieldCfg.region||'') + '";' +
     'var DOMAIN = "' + domain + '";' +
-    'var INIT_PLACEMENT = "' + (placement||'') + '";' +
-    'var allCities=[], selected=[], dropIndex=-1, ENTITY_ID="", PLACEMENT="";' +
+    'var allCities=[], selected=[], dropIndex=-1, ENTITY_ID="", PLACEMENT="' + placement + '";' +
 
     'BX24.init(function() {' +
     '  var info = BX24.placement.info();' +
-    '  PLACEMENT = info.placement || "";' +
+    '  PLACEMENT = info.placement || PLACEMENT;' +
     '  ENTITY_ID = (info.options && info.options.ID) ? String(info.options.ID) : "";' +
     '  if (!DOMAIN) DOMAIN = String(BX24.getDomain ? BX24.getDomain() : "");' +
     '  document.getElementById("loading").style.display = "none";' +
@@ -309,62 +301,22 @@ function renderWidget(fieldCfg, domain, placement) {
     '  var app = document.getElementById("app");' +
     '  var cfgOk = FIELD_DESTINOS && FIELD_PAIS && FIELD_REGION;' +
     '  app.innerHTML =' +
-    '    "<div class=\\"w-header\\"><span class=\\"w-title\\">Destinos</span>" +' +
-    '    "<button class=\\"btn-cfg\\" onclick=\\"toggleCfg()\\">Config</button></div>" +' +
-    '    "<div id=\\"cfg-panel\\">" +' +
-    '    "<div class=\\"srow\\"><label>ID Campo Destinos/Ciudades</label><input type=\\"text\\" id=\\"f-destinos\\" value=\\"" + FIELD_DESTINOS + "\\" placeholder=\\"UF_CRM_XXXXXXXXXX\\"></div>" +' +
-    '    "<div class=\\"srow\\"><label>ID Campo Pais</label><input type=\\"text\\" id=\\"f-pais\\" value=\\"" + FIELD_PAIS + "\\" placeholder=\\"UF_CRM_XXXXXXXXXX\\"></div>" +' +
-    '    "<div class=\\"srow\\"><label>ID Campo Region</label><input type=\\"text\\" id=\\"f-region\\" value=\\"" + FIELD_REGION + "\\" placeholder=\\"UF_CRM_XXXXXXXXXX\\"></div>" +' +
-    '    "<button class=\\"btn-blue\\" onclick=\\"saveCfg()\\">Guardar configuracion</button>" +' +
-    '    "<div id=\\"cfg-status\\" style=\\"margin-top:8px;font-size:12px\\"></div></div>" +' +
     '    "<div class=\\"sw\\"><input type=\\"text\\" id=\\"search-input\\" placeholder=\\"Escribe una ciudad...\\" autocomplete=\\"off\\" oninput=\\"onSearch(this.value)\\" onkeydown=\\"onKeyDown(event)\\">" +' +
     '    "<div id=\\"dropdown\\"></div></div>" +' +
     '    "<div id=\\"tags\\"></div>" +' +
     '    "<button id=\\"btn-apply\\" onclick=\\"applyToDeal()\\">Guardar en Deal</button>" +' +
     '    "<div id=\\"status-msg\\"></div>";' +
     '  if (!cfgOk) {' +
-    '    document.getElementById("cfg-panel").style.display = "block";' +
-    '    setStatus("Configura los campos UF arriba.", "err");' +
+    '    app.innerHTML += "<div class=\\"no-cfg\\">Widget no configurado. Ve a Destinos Config en el menu izquierdo.</div>";' +
     '  } else {' +
     '    loadCities();' +
     '    if (ENTITY_ID) loadExisting();' +
     '  }' +
     '}' +
 
-    'function toggleCfg() {' +
-    '  var p = document.getElementById("cfg-panel");' +
-    '  p.style.display = p.style.display === "none" ? "block" : "none";' +
-    '}' +
-
-    'function saveCfg() {' +
-    '  var d = FIELD_DESTINOS = document.getElementById("f-destinos").value.trim();' +
-    '  var p = FIELD_PAIS = document.getElementById("f-pais").value.trim();' +
-    '  var r = FIELD_REGION = document.getElementById("f-region").value.trim();' +
-    '  if (!d || !p || !r) { alert("Completa los 3 campos."); return; }' +
-    '  fetch(WORKER_URL + "/config", {' +
-    '    method: "POST",' +
-    '    headers: { "Content-Type": "application/json" },' +
-    '    body: JSON.stringify({ domain: DOMAIN, destinos: d, pais: p, region: r })' +
-    '  }).then(function(res){ return res.json(); })' +
-    '  .then(function(j) {' +
-    '    var el = document.getElementById("cfg-status");' +
-    '    if (j.ok) {' +
-    '      el.textContent = "Guardado correctamente";' +
-    '      el.style.color = "#2d9e5f";' +
-    '      document.getElementById("cfg-panel").style.display = "none";' +
-    '      loadCities();' +
-    '      if (ENTITY_ID) loadExisting();' +
-    '    } else {' +
-    '      el.textContent = "Error: " + (j.error || "");' +
-    '      el.style.color = "#e05555";' +
-    '    }' +
-    '  });' +
-    '}' +
-
     'function loadCities() {' +
-    '  setStatus("Cargando ciudades...", "info");' +
     '  fetch(CITIES_URL).then(function(r){return r.json();})' +
-    '  .then(function(data){ allCities=data; setStatus("",""); })' +
+    '  .then(function(data){ allCities=data; })' +
     '  .catch(function(){ setStatus("Error cargando ciudades.","err"); });' +
     '}' +
 
@@ -374,16 +326,13 @@ function renderWidget(fieldCfg, domain, placement) {
     '  BX24.callMethod(entity + ".get", { id: ENTITY_ID }, function(r) {' +
     '    if (r.error()) return;' +
     '    var data = r.data();' +
-    '    var ciudadesStr = data[FIELD_DESTINOS] || "";' +
-    '    var paisesStr = data[FIELD_PAIS] || "";' +
-    '    var regionesStr = data[FIELD_REGION] || "";' +
-    '    if (!ciudadesStr) return;' +
-    '    var ciudades = ciudadesStr.split(", ");' +
-    '    var paises = paisesStr.split(", ");' +
-    '    var regiones = regionesStr.split(", ");' +
+    '    var ciudadesArr = data[FIELD_DESTINOS] || [];' +
+    '    var paisesArr = data[FIELD_PAIS] || [];' +
+    '    var regionesArr = data[FIELD_REGION] || [];' +
+    '    if (!ciudadesArr.length) return;' +
     '    selected = [];' +
-    '    for (var i=0;i<ciudades.length;i++) {' +
-    '      if (ciudades[i]) selected.push({ ciudad: ciudades[i], pais: paises[i]||"", region: regiones[i]||"" });' +
+    '    for (var i=0;i<ciudadesArr.length;i++) {' +
+    '      if (ciudadesArr[i]) selected.push({ ciudad: ciudadesArr[i], pais: paisesArr[i]||"", region: regionesArr[i]||"" });' +
     '    }' +
     '    renderTags();' +
     '    if (selected.length) document.getElementById("btn-apply").style.display = "block";' +
@@ -402,7 +351,7 @@ function renderWidget(fieldCfg, domain, placement) {
     '    var idx=allCities.indexOf(results[i]);' +
     '    h+="<div class=\\"di\\" onmousedown=\\"pick("+idx+")\\">" +' +
     '      "<div class=\\"dc\\">"+hl(results[i].ciudad,q)+"</div>" +' +
-    '      "<div class=\\"dm\\">"+results[i].pais+" - "+results[i].region+"</div></div>";' +
+    '      "<div class=\\"dm\\">"+results[i].pais+" · "+results[i].region+"</div></div>";' +
     '  }' +
     '  dd.innerHTML=h; dd.style.display="block";' +
     '}' +
@@ -441,7 +390,7 @@ function renderWidget(fieldCfg, domain, placement) {
     'function renderTags() {' +
     '  var h="";' +
     '  for(var i=0;i<selected.length;i++){' +
-    '    h+="<div class=\\"tag\\"><span>"+selected[i].ciudad+", "+selected[i].pais+"</span><span class=\\"tr\\" onclick=\\"removeCity("+i+")\\">x</span></div>";' +
+    '    h+="<div class=\\"tag\\"><span>"+selected[i].ciudad+", "+selected[i].pais+"</span><span class=\\"tr\\" onclick=\\"removeCity("+i+")\\">×</span></div>";' +
     '  }' +
     '  document.getElementById("tags").innerHTML=h;' +
     '}' +
@@ -450,17 +399,15 @@ function renderWidget(fieldCfg, domain, placement) {
     '  if(!selected.length||!ENTITY_ID||!FIELD_DESTINOS) return;' +
     '  var btn=document.getElementById("btn-apply");' +
     '  btn.disabled=true; btn.textContent="Guardando...";' +
-    '  var ciudades=[],paises=[],regiones=[];' +
+    '  var ciudades=[], paisesUniq=[], regionesUniq=[];' +
     '  for(var i=0;i<selected.length;i++){' +
     '    ciudades.push(selected[i].ciudad);' +
-    '    if(paises.indexOf(selected[i].pais)<0) paises.push(selected[i].pais);' +
-    '    if(regiones.indexOf(selected[i].region)<0) regiones.push(selected[i].region);' +
+    '    if(paisesUniq.indexOf(selected[i].pais)<0) paisesUniq.push(selected[i].pais);' +
+    '    if(regionesUniq.indexOf(selected[i].region)<0) regionesUniq.push(selected[i].region);' +
     '  }' +
     '  var entity=PLACEMENT.indexOf("LEAD")>=0?"crm.lead":"crm.deal";' +
     '  var fields={};' +
     '  fields[FIELD_DESTINOS]=ciudades;' +
-    '  var paisesUniq=selected.map(function(s){return s.pais;}).filter(function(v,i,a){return a.indexOf(v)===i;});' +
-    '  var regionesUniq=selected.map(function(s){return s.region;}).filter(function(v,i,a){return a.indexOf(v)===i;});' +
     '  fields[FIELD_PAIS]=paisesUniq;' +
     '  fields[FIELD_REGION]=regionesUniq;' +
     '  BX24.callMethod(entity+".update",{id:ENTITY_ID,fields:fields},function(result){' +
@@ -486,4 +433,29 @@ function renderWidget(fieldCfg, domain, placement) {
     '  if(!e.target.closest||!e.target.closest(".sw")) closeDropdown();' +
     '});' +
     '<\/script></body></html>';
+}
+
+// ── STATIC PAGES ─────────────────────────────────────────
+function renderInstallSuccess(tenant, domain) {
+  return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+    '<script src="//api.bitrix24.com/api/v1/"><\/script>' +
+    '<style>body{font-family:Arial,sans-serif;padding:30px;text-align:center}' +
+    '.ok{color:#2d9e5f;font-size:18px;font-weight:600;margin-bottom:8px}' +
+    'p{color:#666;font-size:13px;margin-top:6px}</style></head><body>' +
+    '<div class="ok">✓ Destinos instalado correctamente</div>' +
+    '<p>Portal: ' + domain + '</p>' +
+    '<p>Abre un Deal → pestaña Destinos</p>' +
+    '<p>Configura los campos en el menu izquierdo → Destinos Config</p>' +
+    '<script>BX24.init(function(){ setTimeout(function(){ BX24.closeApplication(); }, 4000); });<\/script>' +
+    '</body></html>';
+}
+
+function renderWelcomePage() {
+  return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+    '<style>body{font-family:Arial,sans-serif;padding:40px;text-align:center;color:#333}' +
+    'h2{color:#5b6cf6}p{color:#888;font-size:13px;margin-top:8px}</style></head><body>' +
+    '<h2>🌍 Destinos / World Cities</h2>' +
+    '<p>Widget de busqueda de ciudades para Bitrix24</p>' +
+    '<p style="font-size:11px;margin-top:16px">by RIPUZ</p>' +
+    '</body></html>';
 }
