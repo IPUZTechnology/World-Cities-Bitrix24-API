@@ -167,10 +167,15 @@ async function handleRequest(request, event) {
 
       console.log('POST_DEBUG', JSON.stringify({ placement, domain, authToken: authToken.substring(0,10), allKeys: fdPeek ? [...fdPeek.keys()] : [] }));
 
-      // DEBUG - mostrar placement recibido
-      // Bitrix manda PLACEMENT=DEFAULT cuando abre desde LEFT_MENU
-      // En ese caso el DOMAIN viene en querystring desde el handler registrado con ?DOMAIN=
-      const isLeftMenu = placement === 'DEFAULT' || placement === 'LEFT_MENU' || 
+      // status=L → instalación nueva. status=P → apertura normal (LEFT_MENU o widget)
+      const status = fdPeek ? String(fdPeek.get('status') || '').trim().toUpperCase() : '';
+      const isInstall = authToken && authToken.length > 10 && status === 'L';
+
+      // Instalación real
+      if (isInstall) return handleInstall(request, event, url, corsHeaders, fdPeek);
+
+      // DEFAULT con status != L → LEFT_MENU o widget apertura
+      const isLeftMenu = placement === 'DEFAULT' || placement === 'LEFT_MENU' ||
                          placement.toLowerCase().includes('left') || placement.toLowerCase().includes('menu');
       if (isLeftMenu) {
         let fieldCfg = { destinos: '', pais: '', region: '', lead_destinos: '', lead_pais: '', lead_region: '' };
@@ -203,10 +208,8 @@ async function handleRequest(request, event) {
       }
 
       // Instalación real — Bitrix manda auth[access_token] o ACCESS_TOKEN
-      const isInstall = authToken && authToken.length > 10;
+      // Si llegó aquí sin ser install ni LEFT_MENU → responder welcome
 
-      // Instalación real — solo si trae access_token válido
-      if (isInstall) return handleInstall(request, event, url, corsHeaders, fdPeek);
     }
 
     // GET con DOMAIN → LEFT_MENU o app abierta → settings
