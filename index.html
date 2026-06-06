@@ -8,8 +8,19 @@
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: Arial, sans-serif; font-size: 14px; color: #333; background: #fff; padding: 12px; }
-
   #loading { text-align: center; padding: 20px; color: #aaa; font-size: 13px; }
+
+  /* SETUP PANEL */
+  #setup-panel { text-align: center; padding: 20px 12px; }
+  #setup-panel h3 { font-size: 15px; font-weight: 600; color: #333; margin-bottom: 8px; }
+  #setup-panel p { font-size: 12px; color: #888; margin-bottom: 20px; }
+  .btn-install { background: #5b6cf6; color: #fff; border: none; border-radius: 8px; padding: 10px 24px; font-size: 14px; font-weight: 600; cursor: pointer; width: 100%; margin-bottom: 8px; }
+  .btn-install:hover { background: #4a5ae0; }
+  .btn-install:disabled { background: #bbb; cursor: not-allowed; }
+  #install-status { font-size: 12px; margin-top: 8px; min-height: 16px; }
+  .msg-ok  { color: #2d9e5f; }
+  .msg-err { color: #e05555; }
+  .msg-info{ color: #5b6cf6; }
 
   /* SETTINGS */
   #settings-panel { display: none; background: #f7f7f7; border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
@@ -50,18 +61,12 @@
   .tag-remove { cursor: pointer; color: #8891e0; font-size: 14px; line-height: 1; }
   .tag-remove:hover { color: #e05555; }
 
-  /* APPLY BTN */
   #btn-apply { display: none; margin-top: 12px; width: 100%; padding: 9px; background: #5b6cf6; color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
   #btn-apply:hover { background: #4a5ae0; }
   #btn-apply:disabled { background: #bbb; cursor: not-allowed; }
 
-  /* STATUS */
   #status-msg { margin-top: 8px; font-size: 12px; text-align: center; min-height: 16px; }
-  .msg-ok { color: #2d9e5f; }
-  .msg-err { color: #e05555; }
-  .msg-info { color: #888; }
 
-  /* NOT CONFIGURED */
   #not-configured { text-align: center; padding: 20px 10px; color: #aaa; font-size: 12px; }
   #not-configured button { margin-top: 8px; background: none; border: 1px solid #ddd; border-radius: 6px; padding: 6px 14px; font-size: 12px; cursor: pointer; color: #666; }
   #not-configured button:hover { border-color: #5b6cf6; color: #5b6cf6; }
@@ -70,49 +75,11 @@
 <body>
 
 <div id="loading">Iniciando...</div>
-
-<div id="app" style="display:none">
-  <div class="widget-header">
-    <span class="widget-title">🌍 Destinos</span>
-    <button class="btn-gear" onclick="toggleSettings()" title="Configuración">⚙️</button>
-  </div>
-
-  <!-- SETTINGS -->
-  <div id="settings-panel">
-    <h3>Configuración</h3>
-    <div class="setting-row">
-      <label>ID Campo País</label>
-      <input type="text" id="cfg-pais" placeholder="UF_CRM_XXXXXXXXXX">
-    </div>
-    <div class="setting-row">
-      <label>ID Campo Región</label>
-      <input type="text" id="cfg-region" placeholder="UF_CRM_XXXXXXXXXX">
-    </div>
-    <button class="btn-save" onclick="saveConfig()">Guardar</button>
-    <button class="btn-cancel" onclick="toggleSettings()">Cancelar</button>
-  </div>
-
-  <!-- MAIN -->
-  <div id="not-configured">
-    <div>Widget no configurado aún</div>
-    <button onclick="toggleSettings()">⚙️ Configurar ahora</button>
-  </div>
-
-  <div id="search-section" style="display:none">
-    <div class="search-wrap">
-      <span class="search-icon">🔍</span>
-      <input type="text" id="search-input" placeholder="Escribe una ciudad..." autocomplete="off"
-        oninput="onSearch(this.value)" onkeydown="onKeyDown(event)">
-      <div id="dropdown"></div>
-    </div>
-    <div id="tags"></div>
-    <button id="btn-apply" onclick="applyToDeal()">Guardar en Deal</button>
-    <div id="status-msg"></div>
-  </div>
-</div>
+<div id="app" style="display:none"></div>
 
 <script>
   var CITIES_URL = 'https://world-cities-bitrix24-api.pages.dev/src/cities.json';
+  var HANDLER    = 'https://world-cities-bitrix24-api.pages.dev/';
   var allCities  = [];
   var selected   = [];
   var dropIndex  = -1;
@@ -120,7 +87,6 @@
   var ENTITY_ID  = '';
   var PLACEMENT  = '';
 
-  // ── BX24 INIT ───────────────────────────────────────────
   BX24.init(function() {
     var info  = BX24.placement.info();
     PLACEMENT = info.placement || '';
@@ -129,17 +95,95 @@
     document.getElementById('loading').style.display = 'none';
     document.getElementById('app').style.display     = 'block';
 
-    // Leer config guardada en Bitrix24 (por tenant)
+    // Si no está en Deal o Lead → mostrar panel de instalación
+    if (PLACEMENT !== 'CRM_DEAL_DETAIL_TAB' && PLACEMENT !== 'CRM_LEAD_DETAIL_TAB') {
+      showSetupPanel();
+      return;
+    }
+
+    // Leer config guardada en Bitrix24
     BX24.appOption.get('destinos_cfg', function(val) {
-      if (val) {
-        try { cfg = JSON.parse(val); } catch(e) { cfg = {}; }
-      }
-      applyConfig();
+      if (val) { try { cfg = JSON.parse(val); } catch(e) { cfg = {}; } }
+      showWidget();
     });
   });
 
-  // ── CONFIG ──────────────────────────────────────────────
-  function applyConfig() {
+  // ── SETUP PANEL (instalación de placements) ──────────────
+  function showSetupPanel() {
+    document.getElementById('app').innerHTML = `
+      <div id="setup-panel">
+        <h3>🌍 Destinos / World Cities</h3>
+        <p>Haz clic para registrar el widget en Deals y Leads de este portal.</p>
+        <button class="btn-install" onclick="installPlacements()">Instalar widget en Deals y Leads</button>
+        <div id="install-status"></div>
+      </div>`;
+  }
+
+  function installPlacements() {
+    var btn = document.querySelector('.btn-install');
+    btn.disabled = true;
+    setInstallStatus('Registrando en Deals...', 'info');
+
+    BX24.callMethod('placement.bind', {
+      PLACEMENT: 'CRM_DEAL_DETAIL_TAB',
+      HANDLER: HANDLER,
+      TITLE: 'Destinos'
+    }, function(r1) {
+      setInstallStatus('Registrando en Leads...', 'info');
+      BX24.callMethod('placement.bind', {
+        PLACEMENT: 'CRM_LEAD_DETAIL_TAB',
+        HANDLER: HANDLER,
+        TITLE: 'Destinos'
+      }, function(r2) {
+        setInstallStatus('✓ Listo. Abre un Deal o Lead y busca la pestaña Destinos.', 'ok');
+        btn.textContent = '✓ Instalado';
+      });
+    });
+  }
+
+  function setInstallStatus(msg, type) {
+    var el = document.getElementById('install-status');
+    if (!el) return;
+    el.textContent = msg;
+    el.className = type === 'ok' ? 'msg-ok' : type === 'err' ? 'msg-err' : 'msg-info';
+  }
+
+  // ── WIDGET (en Deal/Lead) ────────────────────────────────
+  function showWidget() {
+    document.getElementById('app').innerHTML = `
+      <div class="widget-header">
+        <span class="widget-title">🌍 Destinos</span>
+        <button class="btn-gear" onclick="toggleSettings()" title="Configuración">⚙️</button>
+      </div>
+      <div id="settings-panel">
+        <h3>Configuración</h3>
+        <div class="setting-row">
+          <label>ID Campo País</label>
+          <input type="text" id="cfg-pais" placeholder="UF_CRM_XXXXXXXXXX">
+        </div>
+        <div class="setting-row">
+          <label>ID Campo Región</label>
+          <input type="text" id="cfg-region" placeholder="UF_CRM_XXXXXXXXXX">
+        </div>
+        <button class="btn-save" onclick="saveConfig()">Guardar</button>
+        <button class="btn-cancel" onclick="toggleSettings()">Cancelar</button>
+      </div>
+      <div id="not-configured">
+        <div>Widget no configurado aún</div>
+        <button onclick="toggleSettings()">⚙️ Configurar ahora</button>
+      </div>
+      <div id="search-section" style="display:none">
+        <div class="search-wrap">
+          <span class="search-icon">🔍</span>
+          <input type="text" id="search-input" placeholder="Escribe una ciudad..." autocomplete="off"
+            oninput="onSearch(this.value)" onkeydown="onKeyDown(event)">
+          <div id="dropdown"></div>
+        </div>
+        <div id="tags"></div>
+        <button id="btn-apply" onclick="applyToDeal()">Guardar en Deal</button>
+        <div id="status-msg"></div>
+      </div>`;
+
     document.getElementById('cfg-pais').value   = cfg.pais   || '';
     document.getElementById('cfg-region').value = cfg.region || '';
 
@@ -150,15 +194,18 @@
     }
   }
 
+  // ── CONFIG ───────────────────────────────────────────────
+  function toggleSettings() {
+    var p = document.getElementById('settings-panel');
+    p.style.display = p.style.display === 'none' ? 'block' : 'none';
+  }
+
   function saveConfig() {
     cfg = {
       pais:   document.getElementById('cfg-pais').value.trim(),
       region: document.getElementById('cfg-region').value.trim()
     };
-    if (!cfg.pais || !cfg.region) {
-      alert('Completa los dos campos IDs.'); return;
-    }
-    // Guardar en Bitrix24 (por tenant, no localStorage)
+    if (!cfg.pais || !cfg.region) { alert('Completa los dos campos.'); return; }
     BX24.appOption.set('destinos_cfg', JSON.stringify(cfg), function() {
       toggleSettings();
       document.getElementById('not-configured').style.display = 'none';
@@ -168,12 +215,7 @@
     });
   }
 
-  function toggleSettings() {
-    var p = document.getElementById('settings-panel');
-    p.style.display = p.style.display === 'none' ? 'block' : 'none';
-  }
-
-  // ── LOAD CITIES ─────────────────────────────────────────
+  // ── CITIES ───────────────────────────────────────────────
   function loadCities() {
     setStatus('Cargando ciudades...', 'info');
     fetch(CITIES_URL)
@@ -187,9 +229,9 @@
     dropIndex = -1;
     var q = val.trim().toLowerCase();
     if (q.length < 2) { closeDropdown(); return; }
-    var results = allCities
-      .filter(function(c) { return c.ciudad.toLowerCase().indexOf(q) === 0; })
-      .slice(0, 50);
+    var results = allCities.filter(function(c) {
+      return c.ciudad.toLowerCase().indexOf(q) === 0;
+    }).slice(0, 50);
     showDropdown(results, val.trim());
   }
 
@@ -200,11 +242,10 @@
       dd.style.display = 'block'; return;
     }
     dd.innerHTML = results.map(function(c, i) {
-      return '<div class="drop-item" data-i="' + i + '" onmousedown="selectCity(\'' +
+      return '<div class="drop-item" onmousedown="selectCity(\'' +
         esc(c.ciudad) + '\',\'' + esc(c.pais) + '\',\'' + esc(c.region) + '\')">' +
         '<div class="drop-city">' + highlight(c.ciudad, q) + '</div>' +
-        '<div class="drop-meta">' + c.pais + ' · ' + c.region + '</div>' +
-        '</div>';
+        '<div class="drop-meta">' + c.pais + ' · ' + c.region + '</div></div>';
     }).join('');
     dd.style.display = 'block';
   }
@@ -212,19 +253,20 @@
   function highlight(city, q) {
     var i = city.toLowerCase().indexOf(q.toLowerCase());
     if (i < 0) return city;
-    return city.slice(0,i) + '<strong>' + city.slice(i, i+q.length) + '</strong>' + city.slice(i+q.length);
+    return city.slice(0,i) + '<strong>' + city.slice(i,i+q.length) + '</strong>' + city.slice(i+q.length);
   }
 
   function closeDropdown() {
-    document.getElementById('dropdown').style.display = 'none';
+    var dd = document.getElementById('dropdown');
+    if (dd) dd.style.display = 'none';
   }
 
   function onKeyDown(e) {
     var items = document.querySelectorAll('.drop-item');
-    if (e.key === 'ArrowDown')       { dropIndex = Math.min(dropIndex+1, items.length-1); highlightItem(items); }
-    else if (e.key === 'ArrowUp')    { dropIndex = Math.max(dropIndex-1, 0); highlightItem(items); }
+    if (e.key === 'ArrowDown')  { dropIndex = Math.min(dropIndex+1, items.length-1); highlightItem(items); }
+    else if (e.key === 'ArrowUp')   { dropIndex = Math.max(dropIndex-1, 0); highlightItem(items); }
     else if (e.key === 'Enter' && dropIndex >= 0) { items[dropIndex].dispatchEvent(new MouseEvent('mousedown')); }
-    else if (e.key === 'Escape')     { closeDropdown(); }
+    else if (e.key === 'Escape') { closeDropdown(); }
   }
 
   function highlightItem(items) {
@@ -234,80 +276,63 @@
 
   function esc(s) { return (s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
 
-  // ── SELECT / REMOVE ──────────────────────────────────────
   function selectCity(ciudad, pais, region) {
     closeDropdown();
     document.getElementById('search-input').value = '';
-    if (selected.find(function(s) { return s.ciudad === ciudad && s.pais === pais; })) return;
-    selected.push({ ciudad: ciudad, pais: pais, region: region });
+    if (selected.find(function(s) { return s.ciudad===ciudad && s.pais===pais; })) return;
+    selected.push({ciudad:ciudad, pais:pais, region:region});
     renderTags();
     document.getElementById('btn-apply').style.display = 'block';
   }
 
   function removeCity(i) {
-    selected.splice(i, 1);
+    selected.splice(i,1);
     renderTags();
     if (!selected.length) document.getElementById('btn-apply').style.display = 'none';
   }
 
   function renderTags() {
-    var container = document.getElementById('tags');
-    container.innerHTML = selected.map(function(s, i) {
-      return '<div class="tag">' +
-        '<span title="' + s.ciudad + ', ' + s.pais + '">' + s.ciudad + '</span>' +
-        '<span class="tag-remove" onclick="removeCity(' + i + ')">×</span>' +
-        '</div>';
+    document.getElementById('tags').innerHTML = selected.map(function(s,i) {
+      return '<div class="tag"><span title="'+s.ciudad+', '+s.pais+'">'+s.ciudad+'</span>' +
+        '<span class="tag-remove" onclick="removeCity('+i+')">×</span></div>';
     }).join('');
   }
 
-  // ── APPLY TO DEAL / LEAD ─────────────────────────────────
   function applyToDeal() {
-    if (!selected.length) return;
-    if (!ENTITY_ID) { setStatus('No se detectó el ID del registro.', 'err'); return; }
-
+    if (!selected.length || !ENTITY_ID) return;
     var btn = document.getElementById('btn-apply');
-    btn.disabled = true;
-    btn.textContent = 'Guardando...';
+    btn.disabled = true; btn.textContent = 'Guardando...';
 
-    var paises   = unique(selected.map(function(s) { return s.pais; })).join(', ');
-    var regiones = unique(selected.map(function(s) { return s.region; })).join(', ');
+    var paises   = unique(selected.map(function(s){return s.pais;})).join(', ');
+    var regiones = unique(selected.map(function(s){return s.region;})).join(', ');
     var entity   = PLACEMENT.indexOf('LEAD') >= 0 ? 'crm.lead' : 'crm.deal';
-
-    var fields = {};
+    var fields   = {};
     fields[cfg.pais]   = paises;
     fields[cfg.region] = regiones;
 
-    BX24.callMethod(entity + '.update', {
-      id: ENTITY_ID,
-      fields: fields
-    }, function(result) {
+    BX24.callMethod(entity+'.update', {id:ENTITY_ID, fields:fields}, function(result) {
       if (result.error()) {
-        setStatus('Error: ' + result.error(), 'err');
-        btn.disabled = false;
-        btn.textContent = 'Guardar en Deal';
+        setStatus('Error: '+result.error(), 'err');
+        btn.disabled=false; btn.textContent='Guardar en Deal';
       } else {
         setStatus('✓ Guardado correctamente', 'ok');
-        btn.textContent = '✓ Guardado';
-        setTimeout(function() {
-          btn.textContent = 'Guardar en Deal';
-          btn.disabled = false;
-        }, 2500);
+        btn.textContent='✓ Guardado';
+        setTimeout(function(){ btn.textContent='Guardar en Deal'; btn.disabled=false; }, 2500);
       }
     });
   }
 
-  function unique(arr) {
-    return arr.filter(function(v, i, a) { return a.indexOf(v) === i; });
-  }
+  function unique(arr) { return arr.filter(function(v,i,a){return a.indexOf(v)===i;}); }
 
   function setStatus(msg, type) {
     var el = document.getElementById('status-msg');
+    if (!el) return;
     el.textContent = msg;
-    el.className = type === 'ok' ? 'msg-ok' : type === 'err' ? 'msg-err' : 'msg-info';
+    el.className = type==='ok'?'msg-ok':type==='err'?'msg-err':'msg-info';
   }
 
   document.addEventListener('click', function(e) {
-    if (!e.target.closest('.search-wrap')) closeDropdown();
+    if (!e.target.closest || !e.target.closest('.search-wrap')) closeDropdown();
   });
 </script>
 </body>
