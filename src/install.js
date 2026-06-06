@@ -61,42 +61,47 @@ async function handleRequest(request, event) {
     const restBase = 'https://' + domain + '/rest/';
 
     try {
-      // Llamar crm.deal.fields con OAuth del Worker
-      const r = await fetch(restBase + 'crm.deal.fields.json?auth=' + encodeURIComponent(accessToken), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({})
-      });
-      const data = await r.json();
-      const rawFields = data?.result || {};
+      // Intentar primero crm.userfield.list via GET
+      const r1 = await fetch(
+        restBase + 'crm.userfield.list.json?auth=' + encodeURIComponent(accessToken) +
+        '&ENTITY_ID=CRM_DEAL&order[FIELD_NAME]=ASC',
+        { method: 'GET' }
+      );
+      const d1 = await r1.json();
+      const items = d1?.result || [];
 
-      const allKeys = Object.keys(rawFields);
-      const ufKeys = allKeys.filter(k => k.indexOf('UF_CRM') === 0);
-
-      // Si no hay campos UF_, devolver debug info
-      if (!ufKeys.length) {
-        return new Response(JSON.stringify({ 
-          ok: false, 
-          debug: true,
-          totalKeys: allKeys.length, 
-          ufKeys: ufKeys.length,
-          sampleKeys: allKeys.slice(0, 5),
-          rawSample: allKeys.slice(0,2).reduce((acc, k) => { acc[k] = rawFields[k]; return acc; }, {})
-        }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      if (items.length) {
+        const fields = items.map(f => {
+          const lbl = f.EDIT_FORM_LABEL || f.LIST_COLUMN_LABEL || {};
+          const label = typeof lbl === 'object'
+            ? (lbl['es'] || lbl['en'] || lbl[Object.keys(lbl)[0]] || f.FIELD_NAME)
+            : String(lbl || f.FIELD_NAME);
+          return { id: f.FIELD_NAME, label: label.trim() || f.FIELD_NAME };
+        }).sort((a, b) => a.label.localeCompare(b.label));
+        return new Response(JSON.stringify({ ok: true, fields }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
       }
 
-      const fields = ufKeys
-        .map(key => {
-          const f = rawFields[key];
-          // crm.deal.fields devuelve title como el nombre configurado
-          const label = (f.title && f.title.trim() && f.title !== key)
-            ? f.title.trim()
-            : (f.listLabel || f.editFormLabel || key);
-          return { id: key, label: typeof label === 'object'
-            ? (label['es'] || label['en'] || label[Object.keys(label)[0]] || key)
-            : String(label) };
-        })
-        .sort((a, b) => a.label.localeCompare(b.label));
+      // Fallback: crm.deal.fields
+      const r2 = await fetch(restBase + 'crm.deal.fields.json?auth=' + encodeURIComponent(accessToken), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
+      });
+      const d2 = await r2.json();
+      const rawFields = d2?.result || {};
+      const ufKeys = Object.keys(rawFields).filter(k => k.indexOf('UF_CRM') === 0);
+
+      if (!ufKeys.length) {
+        return new Response(JSON.stringify({ ok: false, debug: true, raw: d2 }), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+
+      const fields = ufKeys.map(key => {
+        const f = rawFields[key];
+        const label = (f.title && f.title.trim() && f.title !== key) ? f.title.trim() : key;
+        return { id: key, label };
+      }).sort((a, b) => a.label.localeCompare(b.label));
 
       return new Response(JSON.stringify({ ok: true, fields }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
