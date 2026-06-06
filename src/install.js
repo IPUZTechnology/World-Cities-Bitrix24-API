@@ -346,13 +346,11 @@ function renderSettingsPage(fieldCfg, domain) {
     'var WORKER_URL = "' + WORKER_URL + '";' +
     'var DOMAIN = "' + domain + '";' +
     'var currentEntity = "deal";' +
-    // Config por entidad: { deal: {destinos, pais, region}, lead: {destinos, pais, region} }
     'var cfgByEntity = {' +
     '  deal: { destinos: "' + (fieldCfg.destinos||'') + '", pais: "' + (fieldCfg.pais||'') + '", region: "' + (fieldCfg.region||'') + '" },' +
     '  lead: { destinos: "' + (fieldCfg.lead_destinos||'') + '", pais: "' + (fieldCfg.lead_pais||'') + '", region: "' + (fieldCfg.lead_region||'') + '" }' +
     '};' +
     'var allFields = [];' +
-
     'BX24.init(function() {' +
     '  if (!DOMAIN) DOMAIN = String(BX24.getDomain ? BX24.getDomain() : "");' +
     '  loadFields();' +
@@ -362,18 +360,16 @@ function renderSettingsPage(fieldCfg, domain) {
     '  try { if (!DOMAIN && BX24.getDomain) DOMAIN = String(BX24.getDomain()); } catch(e) {}' +
     '  loadFields();' +
     '}, 1500);' +
-
     'function switchEntity(entity) {' +
     '  currentEntity = entity;' +
     '  document.getElementById("tab-deal").className = "etab" + (entity==="deal"?" active":"");' +
     '  document.getElementById("tab-lead").className = "etab" + (entity==="lead"?" active":"");' +
-    '  document.getElementById("cfg-title").textContent = "Configuración de campos — " + (entity==="deal"?"Deal":"Lead");' +
+    '  document.getElementById("cfg-title").textContent = "Configuración de campos \u2014 " + (entity==="deal"?"Deal":"Lead");' +
     '  var cfg = cfgByEntity[entity] || {};' +
     '  fillDropdown("f-destinos", allFields, cfg.destinos||"");' +
     '  fillDropdown("f-pais", allFields, cfg.pais||"");' +
     '  fillDropdown("f-region", allFields, cfg.region||"");' +
     '}' +
-
     'function loadFields() {' +
     '  if (!DOMAIN) { console.warn("No DOMAIN"); return; }' +
     '  fetch(WORKER_URL + "/fields?domain=" + encodeURIComponent(DOMAIN))' +
@@ -388,7 +384,6 @@ function renderSettingsPage(fieldCfg, domain) {
     '  })' +
     '  .catch(function(e){ console.error("loadFields error", e); });' +
     '}' +
-
     'function fillDropdown(id, fields, currentVal) {' +
     '  var el = document.getElementById(id);' +
     '  if (!el) return;' +
@@ -396,8 +391,7 @@ function renderSettingsPage(fieldCfg, domain) {
     '  for (var i=0; i<fields.length; i++) {' +
     '    var f = fields[i];' +
     '    var sel = f.id === currentVal ? " selected" : "";' +
-    // Label normal + UF_ en gris chico
-    '    html += "<option value=\"" + f.id + "\"" + sel + ">" + (f.label||f.id) + "  \u2014  " + f.id + "</option>";' +
+    '    html += "<option value=\"" + f.id + "\"" + sel + ">" + (f.label||f.id) + " \u2014 " + f.id + "</option>";' +
     '  }' +
     '  el.innerHTML = html;' +
     '}' +
