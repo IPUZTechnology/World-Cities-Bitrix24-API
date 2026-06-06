@@ -268,16 +268,22 @@ function renderSettingsPage(fieldCfg, domain) {
     '  loadFields();' +
     '}, 1500);' +
     'function loadFields() {' +
-    '  BX24.callMethod("crm.userfield.list", { order: { FIELD_NAME: "ASC" }, filter: { ENTITY_ID: "CRM_DEAL" } }, function(r) {' +
-    '    if (r.error()) { console.error("userfield error", r.error()); return; }' +
+    '  BX24.callMethod("crm.deal.fields", {}, function(r) {' +
+    '    if (r.error()) { console.error("fields error", r.error()); return; }' +
     '    var fields = r.data();' +
     '    var ufFields = [];' +
-    '    for (var i = 0; i < fields.length; i++) {' +
-    '      var f = fields[i];' +
-    '      var key = f.FIELD_NAME;' +
-    '      var labelObj = f.EDIT_FORM_LABEL || f.LIST_COLUMN_LABEL || {};' +
-    '      var label = labelObj["es"] || labelObj["en"] || labelObj[Object.keys(labelObj)[0]] || key;' +
-    '      if (!label || !label.trim() || label === key) label = key;' +
+    '    for (var key in fields) {' +
+    '      if (key.indexOf("UF_CRM") !== 0) continue;' +
+    '      var f = fields[key];' +
+    '      // Buscar label en todas las propiedades disponibles' +
+    '      var label = "";' +
+    '      var tries = ["listLabel","editFormLabel","title","formLabel","filterLabel"];' +
+    '      for (var t = 0; t < tries.length; t++) {' +
+    '        var v = f[tries[t]];' +
+    '        if (v && typeof v === "object") v = v["es"] || v["en"] || v[Object.keys(v)[0]] || "";' +
+    '        if (v && String(v).trim() && String(v).trim() !== key) { label = String(v).trim(); break; }' +
+    '      }' +
+    '      if (!label) label = key;' +
     '      ufFields.push({ id: key, title: label });' +
     '    }' +
     '    ufFields.sort(function(a,b){ return a.title.localeCompare(b.title); });' +
