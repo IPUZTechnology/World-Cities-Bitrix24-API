@@ -35,8 +35,8 @@ async function handleRequest(request, event) {
       const placement = fdPeek ? String(fdPeek.get('PLACEMENT') || fdPeek.get('placement') || '').trim() : '';
       const domain = fdPeek ? String(fdPeek.get('DOMAIN') || fdPeek.get('domain') || url.searchParams.get('DOMAIN') || '').trim().toLowerCase() : '';
 
-      // LEFT_MENU → settings panel
-      if (placement === 'LEFT_MENU') {
+      // DEBUG - mostrar placement recibido
+      if (placement === 'LEFT_MENU' || placement.toLowerCase().includes('left') || placement.toLowerCase().includes('menu')) {
         let fieldCfg = { destinos: '', pais: '', region: '' };
         if (typeof TENANT_CONFIG !== 'undefined' && domain) {
           const raw = await TENANT_CONFIG.get('fields:' + domain).catch(() => null);
