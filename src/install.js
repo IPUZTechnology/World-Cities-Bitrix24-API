@@ -23,6 +23,20 @@ async function handleRequest(request, event) {
     return fetch(CITIES_URL);
   }
 
+  // ── REBIND (re-registrar placements sin reinstalar) ──────
+  if (path === '/rebind' && request.method === 'GET') {
+    const domain = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
+    if (!domain) return new Response('Falta DOMAIN', { status: 400 });
+    let oauth = null;
+    if (typeof TENANT_CONFIG !== 'undefined') {
+      const raw = await TENANT_CONFIG.get('oauth:domain:' + domain).catch(() => null);
+      if (raw) { try { oauth = JSON.parse(raw); } catch(e) {} }
+    }
+    if (!oauth?.auth?.access_token) return new Response('OAuth no encontrado para ' + domain, { status: 404 });
+    await bindPlacements(domain, oauth.auth.access_token);
+    return new Response('Placements re-registrados para ' + domain, { status: 200, headers: corsHeaders });
+  }
+
   // ── CONFIG SAVE API ──────────────────────────────────────
   if (path === '/config' && request.method === 'POST') {
     return handleConfigSave(request, corsHeaders);
@@ -132,16 +146,17 @@ async function handleInstall(request, event, url, corsHeaders, fd) {
 async function bindPlacements(domain, accessToken) {
   const restBase = 'https://' + domain + '/rest/';
   const placements = [
-    { placement: 'CRM_DEAL_DETAIL_TAB', title: 'Destinos' },
-    { placement: 'CRM_LEAD_DETAIL_TAB', title: 'Destinos' },
-    { placement: 'LEFT_MENU', title: 'Destinos Config' }
+    { placement: 'CRM_DEAL_DETAIL_TAB', title: 'Destinos', handler: WORKER_URL },
+    { placement: 'CRM_LEAD_DETAIL_TAB', title: 'Destinos', handler: WORKER_URL },
+    // LEFT_MENU necesita DOMAIN en la URL para que el GET lo detecte correctamente
+    { placement: 'LEFT_MENU', title: 'Destinos Config', handler: WORKER_URL + '?DOMAIN=' + encodeURIComponent(domain) }
   ];
   for (const p of placements) {
     try {
       await fetch(restBase + 'placement.bind.json?auth=' + encodeURIComponent(accessToken), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ PLACEMENT: p.placement, HANDLER: WORKER_URL, TITLE: p.title })
+        body: JSON.stringify({ PLACEMENT: p.placement, HANDLER: p.handler, TITLE: p.title })
       });
     } catch(e) {}
   }
