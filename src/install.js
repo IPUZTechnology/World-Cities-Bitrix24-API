@@ -165,10 +165,8 @@ async function handleRequest(request, event) {
       const domain = domainBody || domainQS;
       const authToken = fdPeek ? String(fdPeek.get('AUTH_ID') || fdPeek.get('auth[access_token]') || fdPeek.get('access_token') || '').trim() : '';
 
-      console.log('POST_DEBUG', JSON.stringify({ placement, domain, authToken: authToken.substring(0,10), allKeys: fdPeek ? [...fdPeek.keys()] : [] }));
-
-      // status=L → instalación nueva. status=P → apertura normal (LEFT_MENU o widget)
       const status = fdPeek ? String(fdPeek.get('status') || '').trim().toUpperCase() : '';
+      console.log('POST_DEBUG', JSON.stringify({ placement, domain, authToken: authToken.substring(0,10), status, allKeys: fdPeek ? [...fdPeek.keys()] : [] }));
       const isInstall = authToken && authToken.length > 10 && status === 'L';
 
       // Instalación real
