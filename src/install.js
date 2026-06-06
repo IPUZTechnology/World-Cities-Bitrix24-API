@@ -458,7 +458,7 @@ function renderWidget(fieldCfg, domain, placement) {
     '  }' +
     '  var entity=PLACEMENT.indexOf("LEAD")>=0?"crm.lead":"crm.deal";' +
     '  var fields={};' +
-    '  fields[FIELD_DESTINOS]=ciudades.join(", ");' +
+    '  fields[FIELD_DESTINOS]=ciudades;' +
     '  fields[FIELD_PAIS]=paises.join(", ");' +
     '  fields[FIELD_REGION]=regiones.join(", ");' +
     '  BX24.callMethod(entity+".update",{id:ENTITY_ID,fields:fields},function(result){' +
