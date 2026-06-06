@@ -54,20 +54,12 @@ async function handleRequest(request, event) {
       const domainBody = fdPeek ? String(fdPeek.get('DOMAIN') || fdPeek.get('domain') || '').trim().toLowerCase() : '';
       const domain = domainBody || domainQS;
 
-      // DEBUG TEMPORAL — ver exactamente qué llega de Bitrix
-      return new Response(
-        'METHOD: ' + request.method + '\n' +
-        'PLACEMENT_QS: [' + placementQS + ']\n' +
-        'PLACEMENT_BODY: [' + placementBody + ']\n' +
-        'PLACEMENT: [' + placement + ']\n' +
-        'DOMAIN: [' + domain + ']\n' +
-        'ALL_QS: ' + url.search + '\n' +
-        'ALL_BODY_KEYS: ' + (fdPeek ? [...fdPeek.keys()].join(', ') : 'none'),
-        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'text/plain' } }
-      );
-
       // DEBUG - mostrar placement recibido
-      if (placement === 'LEFT_MENU' || placement.toLowerCase().includes('left') || placement.toLowerCase().includes('menu')) {
+      // Bitrix manda PLACEMENT=DEFAULT cuando abre desde LEFT_MENU
+      // En ese caso el DOMAIN viene en querystring desde el handler registrado con ?DOMAIN=
+      const isLeftMenu = placement === 'DEFAULT' || placement === 'LEFT_MENU' || 
+                         placement.toLowerCase().includes('left') || placement.toLowerCase().includes('menu');
+      if (isLeftMenu) {
         let fieldCfg = { destinos: '', pais: '', region: '' };
         if (typeof TENANT_CONFIG !== 'undefined' && domain) {
           const raw = await TENANT_CONFIG.get('fields:' + domain).catch(() => null);
@@ -92,8 +84,12 @@ async function handleRequest(request, event) {
         });
       }
 
-      // Instalación real
-      return handleInstall(request, event, url, corsHeaders, fdPeek);
+      // Si es DEFAULT sin AUTH_ID válido → es apertura desde LEFT_MENU, no instalación
+      const authId = fdPeek ? String(fdPeek.get('AUTH_ID') || '').trim() : '';
+      const isInstall = authId && authId.length > 10;
+
+      // Instalación real — solo si trae AUTH_ID válido
+      if (isInstall) return handleInstall(request, event, url, corsHeaders, fdPeek);
     }
 
     // GET con DOMAIN → LEFT_MENU o app abierta → settings
