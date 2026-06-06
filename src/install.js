@@ -54,6 +54,18 @@ async function handleRequest(request, event) {
       const domainBody = fdPeek ? String(fdPeek.get('DOMAIN') || fdPeek.get('domain') || '').trim().toLowerCase() : '';
       const domain = domainBody || domainQS;
 
+      // DEBUG TEMPORAL — ver exactamente qué llega de Bitrix
+      return new Response(
+        'METHOD: ' + request.method + '\n' +
+        'PLACEMENT_QS: [' + placementQS + ']\n' +
+        'PLACEMENT_BODY: [' + placementBody + ']\n' +
+        'PLACEMENT: [' + placement + ']\n' +
+        'DOMAIN: [' + domain + ']\n' +
+        'ALL_QS: ' + url.search + '\n' +
+        'ALL_BODY_KEYS: ' + (fdPeek ? [...fdPeek.keys()].join(', ') : 'none'),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'text/plain' } }
+      );
+
       // DEBUG - mostrar placement recibido
       if (placement === 'LEFT_MENU' || placement.toLowerCase().includes('left') || placement.toLowerCase().includes('menu')) {
         let fieldCfg = { destinos: '', pais: '', region: '' };
