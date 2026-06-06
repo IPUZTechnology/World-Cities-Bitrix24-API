@@ -43,9 +43,10 @@ async function handleRequest(request, event) {
   }
 
   // ── FIELDS API — devuelve campos UF_ con labels reales ───
-  // GET /fields?domain=megatravel.bitrix24.co
+  // GET /fields?domain=megatravel.bitrix24.co&entity=deal|lead
   if (path === '/fields' && request.method === 'GET') {
     const domain = String(url.searchParams.get('domain') || url.searchParams.get('DOMAIN') || '').trim().toLowerCase();
+    const entity = String(url.searchParams.get('entity') || 'deal').trim().toLowerCase();
     if (!domain) return new Response(JSON.stringify({ ok: false, error: 'Falta domain' }), { status: 400, headers: corsHeaders });
 
     let oauth = null;
@@ -59,6 +60,36 @@ async function handleRequest(request, event) {
 
     const accessToken = oauth.auth.access_token;
     const restBase = 'https://' + domain + '/rest/';
+    // Método Bitrix según entidad
+    const fieldsMethod = entity === 'lead' ? 'crm.lead.fields.json' : 'crm.deal.fields.json';
+
+    try {
+      const r2 = await fetch(restBase + fieldsMethod + '?auth=' + encodeURIComponent(accessToken), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
+      });
+      const d2 = await r2.json();
+      const rawFields = d2?.result || {};
+      const ufKeys = Object.keys(rawFields).filter(k => k.indexOf('UF_CRM') === 0);
+
+      const fields = ufKeys.map(key => {
+        const f = rawFields[key];
+        const label = (f.listLabel && f.listLabel.trim() && f.listLabel !== key)
+          ? f.listLabel.trim()
+          : (f.formLabel && f.formLabel.trim() && f.formLabel !== key)
+            ? f.formLabel.trim()
+            : (f.filterLabel && f.filterLabel.trim() && f.filterLabel !== key)
+              ? f.filterLabel.trim()
+              : key;
+        return { id: key, label };
+      }).sort((a, b) => a.label.localeCompare(b.label));
+
+      return new Response(JSON.stringify({ ok: true, fields, entity }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    } catch(e) {
+      return new Response(JSON.stringify({ ok: false, error: String(e) }), { status: 500, headers: corsHeaders });
+    }
+  }
 
     try {
       // Intentar primero crm.userfield.list via GET
@@ -310,6 +341,16 @@ function renderSettingsPage(fieldCfg, domain) {
     '.msg-err { color: #e05555; background: #fff5f5; }' +
     '.hint { font-size: 11px; color: #aaa; margin-top: 4px; }' +
     '.field-select { width:100%; padding:8px 12px; border:1px solid #ddd; border-radius:8px; font-size:13px; background:#fff; }' +
+    '.fs-wrap { position:relative; }' +
+    '.fs-input { width:100%; padding:8px 12px; border:1px solid #ddd; border-radius:8px; font-size:13px; box-sizing:border-box; }' +
+    '.fs-input:focus { outline:none; border-color:#5b6cf6; box-shadow:0 0 0 2px rgba(91,108,246,.12); }' +
+    '.fs-drop { display:none; position:absolute; top:100%; left:0; right:0; z-index:999; background:#fff; border:1px solid #ddd; border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,.12); max-height:200px; overflow-y:auto; margin-top:2px; }' +
+    '.fs-drop.open { display:block; }' +
+    '.fs-item { padding:8px 12px; cursor:pointer; font-size:13px; border-bottom:1px solid #f5f5f5; }' +
+    '.fs-item:hover { background:#f0f2ff; }' +
+    '.fs-item .fs-label { font-weight:500; color:#333; }' +
+    '.fs-item .fs-code { font-size:10px; color:#aaa; margin-left:6px; }' +
+    '.fs-empty { padding:10px 12px; color:#aaa; font-size:12px; }' +
     '</style></head><body>' +
     '<div class="hero">' +
     '<div class="hero-circles">' +
@@ -329,17 +370,17 @@ function renderSettingsPage(fieldCfg, domain) {
     '<h3 id="cfg-title">Configuración de campos — Deal</h3>' +
     '<div class="srow">' +
     '<label>Campo Destinos / Ciudades</label>' +
-    '<select class="field-select" id="f-destinos"><option value="">Cargando...</option></select>' +
+    '<div class="fs-wrap"><input class="fs-input" id="f-destinos-input" placeholder="Buscar campo..." autocomplete="off"><input type="hidden" id="f-destinos"><div class="fs-drop" id="f-destinos-drop"></div></div>' +
     '<div class="hint">Campo tipo string múltiple</div>' +
     '</div>' +
     '<div class="srow">' +
     '<label>Campo País</label>' +
-    '<select class="field-select" id="f-pais"><option value="">Cargando...</option></select>' +
+    '<div class="fs-wrap"><input class="fs-input" id="f-pais-input" placeholder="Buscar campo..." autocomplete="off"><input type="hidden" id="f-pais"><div class="fs-drop" id="f-pais-drop"></div></div>' +
     '<div class="hint">Campo tipo string múltiple</div>' +
     '</div>' +
     '<div class="srow">' +
     '<label>Campo Región</label>' +
-    '<select class="field-select" id="f-region"><option value="">Cargando...</option></select>' +
+    '<div class="fs-wrap"><input class="fs-input" id="f-region-input" placeholder="Buscar campo..." autocomplete="off"><input type="hidden" id="f-region"><div class="fs-drop" id="f-region-drop"></div></div>' +
     '<div class="hint">Campo tipo string múltiple</div>' +
     '</div>' +
     '<button class="btn-save" onclick="saveConfig()" id="btn-save">Guardar configuración</button>' +
@@ -354,50 +395,83 @@ function renderSettingsPage(fieldCfg, domain) {
     '  deal: { destinos: ' + JSON.stringify(fieldCfg.destinos||'') + ', pais: ' + JSON.stringify(fieldCfg.pais||'') + ', region: ' + JSON.stringify(fieldCfg.region||'') + ' },' +
     '  lead: { destinos: ' + JSON.stringify(fieldCfg.lead_destinos||'') + ', pais: ' + JSON.stringify(fieldCfg.lead_pais||'') + ', region: ' + JSON.stringify(fieldCfg.lead_region||'') + ' }' +
     '};' +
-    'var allFields = [];' +
+    'var fieldsByEntity = { deal: [], lead: [] };' +
     'BX24.init(function() {' +
     '  if (!DOMAIN) DOMAIN = String(BX24.getDomain ? BX24.getDomain() : "");' +
-    '  loadFields();' +
+    '  initSearchers();' +
+    '  loadFields("deal");' +
+    '  loadFields("lead");' +
     '});' +
     'setTimeout(function() {' +
-    '  if (allFields.length) return;' +
+    '  if (fieldsByEntity.deal.length || fieldsByEntity.lead.length) return;' +
     '  try { if (!DOMAIN && BX24.getDomain) DOMAIN = String(BX24.getDomain()); } catch(e) {}' +
-    '  loadFields();' +
+    '  initSearchers();' +
+    '  loadFields("deal");' +
+    '  loadFields("lead");' +
     '}, 1500);' +
     'function switchEntity(entity) {' +
     '  currentEntity = entity;' +
     '  document.getElementById("tab-deal").className = "etab" + (entity==="deal"?" active":"");' +
     '  document.getElementById("tab-lead").className = "etab" + (entity==="lead"?" active":"");' +
-    '  document.getElementById("cfg-title").textContent = "Configuración de campos \u2014 " + (entity==="deal"?"Deal":"Lead");' +
+    '  document.getElementById("cfg-title").textContent = "Configuraci\u00f3n de campos \u2014 " + (entity==="deal"?"Deal":"Lead");' +
     '  var cfg = cfgByEntity[entity] || {};' +
-    '  fillDropdown("f-destinos", allFields, cfg.destinos||"");' +
-    '  fillDropdown("f-pais", allFields, cfg.pais||"");' +
-    '  fillDropdown("f-region", allFields, cfg.region||"");' +
+    '  var fields = fieldsByEntity[entity] || [];' +
+    '  setSearcherValue("f-destinos", fields, cfg.destinos||"");' +
+    '  setSearcherValue("f-pais", fields, cfg.pais||"");' +
+    '  setSearcherValue("f-region", fields, cfg.region||"");' +
     '}' +
-    'function loadFields() {' +
-    '  if (!DOMAIN) { console.warn("No DOMAIN"); return; }' +
-    '  fetch(WORKER_URL + "/fields?domain=" + encodeURIComponent(DOMAIN))' +
+    'function loadFields(entity) {' +
+    '  if (!DOMAIN) return;' +
+    '  fetch(WORKER_URL + "/fields?domain=" + encodeURIComponent(DOMAIN) + "&entity=" + entity)' +
     '  .then(function(r){ return r.json(); })' +
     '  .then(function(data) {' +
-    '    if (!data.ok || !data.fields) { console.error("fields error", data); return; }' +
-    '    allFields = data.fields.sort(function(a,b){ return a.label.localeCompare(b.label); });' +
-    '    var cfg = cfgByEntity[currentEntity] || {};' +
-    '    fillDropdown("f-destinos", allFields, cfg.destinos||"");' +
-    '    fillDropdown("f-pais", allFields, cfg.pais||"");' +
-    '    fillDropdown("f-region", allFields, cfg.region||"");' +
-    '  })' +
-    '  .catch(function(e){ console.error("loadFields error", e); });' +
+    '    if (!data.ok || !data.fields) return;' +
+    '    fieldsByEntity[entity] = data.fields;' +
+    '    if (entity === currentEntity) {' +
+    '      var cfg = cfgByEntity[entity] || {};' +
+    '      setSearcherValue("f-destinos", data.fields, cfg.destinos||"");' +
+    '      setSearcherValue("f-pais", data.fields, cfg.pais||"");' +
+    '      setSearcherValue("f-region", data.fields, cfg.region||"");' +
+    '    }' +
+    '  }).catch(function(e){ console.error("loadFields error", e); });' +
     '}' +
-    'function fillDropdown(id, fields, currentVal) {' +
-    '  var el = document.getElementById(id);' +
-    '  if (!el) return;' +
-    '  var html = \'<option value="">\' + "-- Selecciona un campo --" + \'</option>\';' +
-    '  for (var i=0; i<fields.length; i++) {' +
-    '    var f = fields[i];' +
-    '    var sel = f.id === currentVal ? " selected" : "";' +
-    '    html += \'<option value="\' + f.id + \'"\' + sel + \'>\'  + (f.label||f.id) + " \u2014 " + f.id + \'</option>\';' +
-    '  }' +
-    '  el.innerHTML = html;' +
+    'function initSearchers() {' +
+    '  ["f-destinos","f-pais","f-region"].forEach(function(id) {' +
+    '    var inp = document.getElementById(id+"-input");' +
+    '    var drop = document.getElementById(id+"-drop");' +
+    '    if (!inp || !drop) return;' +
+    '    inp.addEventListener("input", function() { renderDrop(id, inp.value.trim()); });' +
+    '    inp.addEventListener("focus", function() { renderDrop(id, inp.value.trim()); });' +
+    '    document.addEventListener("click", function(e) {' +
+    '      if (!inp.contains(e.target) && !drop.contains(e.target)) drop.classList.remove("open");' +
+    '    });' +
+    '  });' +
+    '}' +
+    'function renderDrop(id, q) {' +
+    '  var drop = document.getElementById(id+"-drop");' +
+    '  var fields = fieldsByEntity[currentEntity] || [];' +
+    '  var filtered = q ? fields.filter(function(f){ return (f.label+f.id).toLowerCase().indexOf(q.toLowerCase()) >= 0; }) : fields;' +
+    '  if (!filtered.length) { drop.innerHTML = \'<div class="fs-empty">Sin resultados</div>\'; drop.classList.add("open"); return; }' +
+    '  drop.innerHTML = filtered.map(function(f) {' +
+    '    return \'<div class="fs-item" onclick="pickField(\\\'\' + id + \'\\\',\\\'\' + f.id + \'\\\',\\\'\' + f.label.replace(/\'/g,"") + \'\\\')">\' +' +
+    '      \'<span class="fs-label">\' + f.label + \'</span><span class="fs-code">\' + f.id + \'</span></div>\';' +
+    '  }).join("");' +
+    '  drop.classList.add("open");' +
+    '}' +
+    'function pickField(id, fieldId, label) {' +
+    '  document.getElementById(id).value = fieldId;' +
+    '  document.getElementById(id+"-input").value = label + " \u2014 " + fieldId;' +
+    '  document.getElementById(id+"-drop").classList.remove("open");' +
+    '}' +
+    'function setSearcherValue(id, fields, currentVal) {' +
+    '  var hid = document.getElementById(id);' +
+    '  var inp = document.getElementById(id+"-input");' +
+    '  if (!hid || !inp) return;' +
+    '  hid.value = currentVal;' +
+    '  if (currentVal) {' +
+    '    var f = fields.find(function(x){ return x.id === currentVal; });' +
+    '    inp.value = f ? (f.label + " \u2014 " + f.id) : currentVal;' +
+    '  } else { inp.value = ""; }' +
     '}' +
     'function saveConfig() {' +
     '  var d = document.getElementById("f-destinos").value.trim();' +
@@ -414,7 +488,7 @@ function renderSettingsPage(fieldCfg, domain) {
     '  }).then(function(res){ return res.json(); })' +
     '  .then(function(j) {' +
     '    btn.disabled = false; btn.textContent = "Guardar configuración";' +
-    '    if (j.ok) { showStatus("✓ Guardado para " + (currentEntity==="deal"?"Deal":"Lead"), "ok"); }' +
+    '    if (j.ok) { showStatus("\u2713 Guardado para " + (currentEntity==="deal"?"Deal":"Lead"), "ok"); }' +
     '    else { showStatus("Error: " + (j.error||""), "err"); }' +
     '  }).catch(function(e) {' +
     '    btn.disabled = false; btn.textContent = "Guardar configuración";' +
