@@ -348,12 +348,12 @@ function renderSettingsPage(fieldCfg, domain) {
     '</div>' +
 
     '<script>' +
-    'var WORKER_URL = "' + WORKER_URL + '";' +
-    'var DOMAIN = "' + domain + '";' +
+    'var WORKER_URL = ' + JSON.stringify(WORKER_URL) + ';' +
+    'var DOMAIN = ' + JSON.stringify(domain) + ';' +
     'var currentEntity = "deal";' +
     'var cfgByEntity = {' +
-    '  deal: { destinos: "' + (fieldCfg.destinos||'') + '", pais: "' + (fieldCfg.pais||'') + '", region: "' + (fieldCfg.region||'') + '" },' +
-    '  lead: { destinos: "' + (fieldCfg.lead_destinos||'') + '", pais: "' + (fieldCfg.lead_pais||'') + '", region: "' + (fieldCfg.lead_region||'') + '" }' +
+    '  deal: { destinos: ' + JSON.stringify(fieldCfg.destinos||'') + ', pais: ' + JSON.stringify(fieldCfg.pais||'') + ', region: ' + JSON.stringify(fieldCfg.region||'') + ' },' +
+    '  lead: { destinos: ' + JSON.stringify(fieldCfg.lead_destinos||'') + ', pais: ' + JSON.stringify(fieldCfg.lead_pais||'') + ', region: ' + JSON.stringify(fieldCfg.lead_region||'') + ' }' +
     '};' +
     'var allFields = [];' +
     'BX24.init(function() {' +
