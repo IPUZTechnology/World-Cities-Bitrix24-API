@@ -269,7 +269,12 @@ function renderSettingsPage(fieldCfg, domain) {
     '    for (var key in fields) {' +
     '      if (key.indexOf("UF_CRM") === 0) {' +
     '        var f = fields[key];' +
-    '        ufFields.push({ id: key, title: f.title || key });' +
+    '        // Tomar el label más descriptivo disponible' +
+    '        var label = (f.listLabel && f.listLabel.trim() && f.listLabel !== key ? f.listLabel : "") ||' +
+    '                    (f.editFormLabel && f.editFormLabel.trim() && f.editFormLabel !== key ? f.editFormLabel : "") ||' +
+    '                    (f.title && f.title.trim() && f.title !== key ? f.title : "") ||' +
+    '                    key;' +
+    '        ufFields.push({ id: key, title: label });' +
     '      }' +
     '    }' +
     '    ufFields.sort(function(a,b){ return a.title.localeCompare(b.title); });' +
