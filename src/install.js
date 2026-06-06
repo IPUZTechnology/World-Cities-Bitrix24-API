@@ -71,15 +71,21 @@ async function handleRequest(request, event) {
       if (!testD?.error) return accessToken; // Token válido
 
       // Token expirado → refrescar
-      if (!refreshToken) return accessToken; // Sin refresh, intentar igual
-      const B24_CLIENT_ID = typeof CLIENT_ID !== 'undefined' ? CLIENT_ID : '';
-      const B24_CLIENT_SECRET = typeof CLIENT_SECRET !== 'undefined' ? CLIENT_SECRET : '';
+      if (!refreshToken) return accessToken;
+      const B24_CLIENT_ID = (typeof CLIENT_ID !== 'undefined' ? CLIENT_ID : '') || '';
+      const B24_CLIENT_SECRET = (typeof CLIENT_SECRET !== 'undefined' ? CLIENT_SECRET : '') || '';
+      if (!B24_CLIENT_ID || !B24_CLIENT_SECRET) {
+        console.error('refresh: CLIENT_ID o CLIENT_SECRET no definidos');
+        return accessToken;
+      }
       const refreshUrl = 'https://oauth.bitrix.info/oauth/token/?' +
         'grant_type=refresh_token&client_id=' + encodeURIComponent(B24_CLIENT_ID) +
         '&client_secret=' + encodeURIComponent(B24_CLIENT_SECRET) +
         '&refresh_token=' + encodeURIComponent(refreshToken);
+      console.log('refresh: calling', refreshUrl.replace(refreshToken, 'HIDDEN'));
       const rr = await fetch(refreshUrl, { method: 'GET' });
       const rd = await rr.json();
+      console.log('refresh result:', JSON.stringify(rd).substring(0, 200));
       if (rd?.access_token) {
         // Guardar nuevo token en KV
         oauth.auth.access_token = rd.access_token;
@@ -95,6 +101,7 @@ async function handleRequest(request, event) {
 
     try {
       const validToken = await getValidToken();
+      const tokenChanged = validToken !== accessToken;
       const r2 = await fetch(restBase + fieldsMethod + '?auth=' + encodeURIComponent(validToken), {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
       });
@@ -114,7 +121,7 @@ async function handleRequest(request, event) {
         return { id: key, label };
       }).sort((a, b) => a.label.localeCompare(b.label));
 
-      return new Response(JSON.stringify({ ok: true, fields, entity }), {
+      return new Response(JSON.stringify({ ok: true, fields, entity, _refreshed: tokenChanged }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     } catch(e) {
