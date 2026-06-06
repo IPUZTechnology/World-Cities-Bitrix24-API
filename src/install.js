@@ -385,11 +385,11 @@ function renderSettingsPage(fieldCfg, domain) {
     'function fillDropdown(id, fields, currentVal) {' +
     '  var el = document.getElementById(id);' +
     '  if (!el) return;' +
-    '  var html = "<option value=\"\">-- Selecciona un campo --</option>";' +
+    '  var html = \'<option value="">\' + "-- Selecciona un campo --" + \'</option>\';' +
     '  for (var i=0; i<fields.length; i++) {' +
     '    var f = fields[i];' +
     '    var sel = f.id === currentVal ? " selected" : "";' +
-    '    html += "<option value=\"" + f.id + "\"" + sel + ">" + (f.label||f.id) + " \u2014 " + f.id + "</option>";' +
+    '    html += \'<option value="\' + f.id + \'"\' + sel + \'>\'  + (f.label||f.id) + " \u2014 " + f.id + \'</option>\';' +
     '  }' +
     '  el.innerHTML = html;' +
     '}' +
