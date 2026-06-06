@@ -1,9 +1,10 @@
 const CITIES_URL = 'https://world-cities-bitrix24-api.pages.dev/src/cities.json';
 const WORKER_URL = 'https://world-cities-bitrix24.ripuz.workers.dev';
+
 // ── Refresh OAuth global — llamar antes de cualquier llamada a Bitrix ─────────
 async function refreshOAuth(domain, oauth) {
   const refreshToken = oauth?.auth?.refresh_token;
-  const B24_CLIENT_ID = (typeof CLIENT_ID !== 'undefined' ? CLIENT_ID : '') || '';
+  const B24_CLIENT_ID = (typeof BITRIX_CLIENT_ID !== 'undefined' ? BITRIX_CLIENT_ID : '') || '';
   const B24_CLIENT_SECRET = (typeof CLIENT_SECRET !== 'undefined' ? CLIENT_SECRET : '') || '';
   if (!refreshToken || !B24_CLIENT_ID || !B24_CLIENT_SECRET) return oauth;
   try {
@@ -124,7 +125,7 @@ async function handleRequest(request, event) {
       domain,
       storedAt: oauth?.storedAt,
       hasToken: !!oauth?.auth?.access_token,
-      clientId: typeof CLIENT_ID !== 'undefined' ? 'OK:' + String(CLIENT_ID).substring(0,6) : 'MISSING',
+      clientId: typeof BITRIX_CLIENT_ID !== 'undefined' ? 'OK:' + String(BITRIX_CLIENT_ID).substring(0,6) : 'MISSING',
       clientSecret: typeof CLIENT_SECRET !== 'undefined' ? 'OK' : 'MISSING'
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
