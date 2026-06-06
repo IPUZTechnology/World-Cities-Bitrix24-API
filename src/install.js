@@ -83,10 +83,9 @@ async function handleRequest(request) {
 '  if (PLACEMENT !== "CRM_DEAL_DETAIL_TAB" && PLACEMENT !== "CRM_LEAD_DETAIL_TAB") {' +
 '    showSetupPanel(); return;' +
 '  }' +
-'  BX24.appOption.get("destinos_cfg", function(val) {' +
-'    if (val) { try { cfg = JSON.parse(val); } catch(e) { cfg={}; } }' +
-'    showWidget();' +
-'  });' +
+'  var stored = localStorage.getItem("destinos_cfg");' +
+'  if (stored) { try { cfg = JSON.parse(stored); } catch(e) { cfg={}; } }' +
+'  showWidget();' +
 '});' +
 
 'function showSetupPanel() {' +
@@ -151,13 +150,12 @@ async function handleRequest(request) {
 'function saveConfig() {' +
 '  cfg = { pais: document.getElementById("cfg-pais").value.trim(), region: document.getElementById("cfg-region").value.trim() };' +
 '  if (!cfg.pais || !cfg.region) { alert("Completa los dos campos."); return; }' +
-'  BX24.appOption.set("destinos_cfg", JSON.stringify(cfg), function() {' +
-'    toggleSettings();' +
-'    document.getElementById("not-configured").style.display = "none";' +
-'    document.getElementById("search-section").style.display = "block";' +
-'    if (!allCities.length) loadCities();' +
-'    setStatus("Configuracion guardada", "ok");' +
-'  });' +
+'  localStorage.setItem("destinos_cfg", JSON.stringify(cfg));' +
+'  toggleSettings();' +
+'  document.getElementById("not-configured").style.display = "none";' +
+'  document.getElementById("search-section").style.display = "block";' +
+'  if (!allCities.length) loadCities();' +
+'  setStatus("Configuracion guardada", "ok");' +
 '}' +
 
 'function loadCities() {' +
