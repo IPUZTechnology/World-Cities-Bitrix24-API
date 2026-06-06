@@ -261,6 +261,12 @@ function renderSettingsPage(fieldCfg, domain) {
     '  if (!DOMAIN) DOMAIN = String(BX24.getDomain ? BX24.getDomain() : "");' +
     '  loadFields();' +
     '});' +
+    // Fallback: si BX24.init no dispara en 1.5s, intentar loadFields igual
+    'setTimeout(function() {' +
+    '  if (document.querySelector("select#f-destinos, select#f-pais, select#f-region")) return;' +
+    '  try { if (!DOMAIN && BX24.getDomain) DOMAIN = String(BX24.getDomain()); } catch(e) {}' +
+    '  loadFields();' +
+    '}, 1500);' +
     'function loadFields() {' +
     '  BX24.callMethod("crm.deal.fields", {}, function(r) {' +
     '    if (r.error()) return;' +
@@ -269,12 +275,7 @@ function renderSettingsPage(fieldCfg, domain) {
     '    for (var key in fields) {' +
     '      if (key.indexOf("UF_CRM") === 0) {' +
     '        var f = fields[key];' +
-    '        // Tomar el label más descriptivo disponible' +
-    '        var label = (f.listLabel && f.listLabel.trim() && f.listLabel !== key ? f.listLabel : "") ||' +
-    '                    (f.editFormLabel && f.editFormLabel.trim() && f.editFormLabel !== key ? f.editFormLabel : "") ||' +
-    '                    (f.title && f.title.trim() && f.title !== key ? f.title : "") ||' +
-    '                    key;' +
-    '        ufFields.push({ id: key, title: label });' +
+    '        ufFields.push({ id: key, title: f.title || key });' +
     '      }' +
     '    }' +
     '    ufFields.sort(function(a,b){ return a.title.localeCompare(b.title); });' +
