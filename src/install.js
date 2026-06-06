@@ -240,6 +240,11 @@ async function handleInstall(request, event, url, corsHeaders, fd) {
     const refreshToken = String(fd.get('auth[refresh_token]') || fd.get('refresh_token') || fd.get('REFRESH_ID') || '').trim();
     const serverEndpoint = String(fd.get('server_endpoint') || fd.get('SERVER_ENDPOINT') || '').trim();
 
+    // DEBUG temporal — ver qué campos manda Bitrix en el install
+    const allKeys = [];
+    for (const [k, v] of fd.entries()) { allKeys.push(k + '=' + String(v).substring(0, 30)); }
+    console.log('INSTALL_DEBUG', JSON.stringify({ domain, accessToken: accessToken.substring(0,10), allKeys }));
+
     const m = domain.match(/^([a-z0-9-]+)\.bitrix24\.[a-z]{2,}$/i);
     const tenant = (m && m[1]) ? m[1].toLowerCase() : domain.toLowerCase();
 
