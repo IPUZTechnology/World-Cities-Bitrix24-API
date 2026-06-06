@@ -99,12 +99,17 @@ async function handleRequest(request, event) {
 
       const fields = ufKeys.map(key => {
         const f = rawFields[key];
-        const label = (f.title && f.title.trim() && f.title !== key) ? f.title.trim() : key;
+        const label = (f.listLabel && f.listLabel.trim() && f.listLabel !== key)
+          ? f.listLabel.trim()
+          : (f.formLabel && f.formLabel.trim() && f.formLabel !== key)
+            ? f.formLabel.trim()
+            : (f.filterLabel && f.filterLabel.trim() && f.filterLabel !== key)
+              ? f.filterLabel.trim()
+              : key;
         return { id: key, label };
       }).sort((a, b) => a.label.localeCompare(b.label));
 
-      // Debug: incluir raw del primer campo para diagnóstico
-      return new Response(JSON.stringify({ ok: true, fields, _debug_sample: rawFields[ufKeys[0]] }), {
+      return new Response(JSON.stringify({ ok: true, fields }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     } catch(e) {
