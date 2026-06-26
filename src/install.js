@@ -116,31 +116,6 @@ async function handleRequest(request, event) {
 
   // ── REBIND (re-registrar placements sin reinstalar) ──────
   // ── UNBIND por ID numérico ───────────────────────────────
-  // ── CHECK placements en Bitrix24 ────────────────────────
-  if (path === '/check' && request.method === 'GET') {
-    const domain = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
-    if (!domain) return new Response('Falta DOMAIN', { status: 400 });
-    const oauth = await getOAuth(domain);
-    if (!oauth?.auth?.access_token) return new Response(JSON.stringify({ error: 'OAuth no encontrado' }), { status: 404, headers: corsHeaders });
-    const accessToken = oauth.auth.access_token;
-    const restBase = 'https://' + domain + '/rest/';
-    const results = {};
-    for (const p of ['CRM_DEAL_DETAIL_TAB', 'CRM_LEAD_DETAIL_TAB', 'LEFT_MENU']) {
-      try {
-        const r = await fetch(restBase + 'placement.get.json?auth=' + encodeURIComponent(accessToken), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ PLACEMENT: p })
-        });
-        const d = await r.json();
-        results[p] = d?.result || d?.error || d;
-      } catch(e) {
-        results[p] = { error: String(e) };
-      }
-    }
-    return new Response(JSON.stringify({ domain, results }, null, 2), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-  }
-
   if (path === '/unbindall' && request.method === 'GET') {
     const domain = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
     if (!domain) return new Response('Falta DOMAIN', { status: 400 });
@@ -302,24 +277,31 @@ async function handleRequest(request, event) {
 
       const status = fdPeek ? String(fdPeek.get('status') || '').trim().toUpperCase() : '';
       console.log('POST_DEBUG', JSON.stringify({ placement, domain, authToken: authToken.substring(0,10), status, allKeys: fdPeek ? [...fdPeek.keys()] : [] }));
-      // Install real: tiene authToken largo + status F o L
-      // LEFT_MENU: tiene PLACEMENT en body o QS
-      const isInstall = authToken && authToken.length > 10 && (status === 'F' || status === 'L' || (!placement && !status));
 
-      // Instalación real
-      if (isInstall) return handleInstall(request, event, url, corsHeaders, fdPeek);
+      // 1. DEAL/LEAD → widget (ANTES de isInstall)
+      if (placement && (placement.includes('DEAL') || placement.includes('LEAD'))) {
+        const entity = placement.includes('LEAD') ? 'lead' : 'deal';
+        let fieldCfg = { destinos: '', pais: '', region: '' };
+        if (typeof TENANT_CONFIG !== 'undefined' && domain) {
+          const raw = await TENANT_CONFIG.get('fields:' + domain + ':' + entity).catch(() => null)
+                   || (entity === 'deal' ? await TENANT_CONFIG.get('fields:' + domain).catch(() => null) : null);
+          if (raw) { try { fieldCfg = JSON.parse(raw); } catch(e) {} }
+        }
+        return new Response(renderWidget(fieldCfg, domain, placement), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
+        });
+      }
 
-      // DEFAULT con status != L → LEFT_MENU o widget apertura
+      // 2. LEFT_MENU / DEFAULT → settings (ANTES de isInstall)
       const isLeftMenu = placement === 'DEFAULT' || placement === 'LEFT_MENU' ||
                          placement.toLowerCase().includes('left') || placement.toLowerCase().includes('menu');
       if (isLeftMenu) {
         let fieldCfg = { destinos: '', pais: '', region: '', lead_destinos: '', lead_pais: '', lead_region: '' };
         if (typeof TENANT_CONFIG !== 'undefined' && domain) {
-          // Cargar config de deal
           const rawDeal = await TENANT_CONFIG.get('fields:' + domain + ':deal').catch(() => null)
                        || await TENANT_CONFIG.get('fields:' + domain).catch(() => null);
           if (rawDeal) { try { const d = JSON.parse(rawDeal); fieldCfg.destinos = d.destinos||''; fieldCfg.pais = d.pais||''; fieldCfg.region = d.region||''; } catch(e) {} }
-          // Cargar config de lead
           const rawLead = await TENANT_CONFIG.get('fields:' + domain + ':lead').catch(() => null);
           if (rawLead) { try { const l = JSON.parse(rawLead); fieldCfg.lead_destinos = l.destinos||''; fieldCfg.lead_pais = l.pais||''; fieldCfg.lead_region = l.region||''; } catch(e) {} }
         }
@@ -329,20 +311,12 @@ async function handleRequest(request, event) {
         });
       }
 
-      // Deal/Lead → widget
-      if (placement && (placement.includes('DEAL') || placement.includes('LEAD'))) {
-        let fieldCfg = { destinos: '', pais: '', region: '' };
-        if (typeof TENANT_CONFIG !== 'undefined' && domain) {
-          const raw = await TENANT_CONFIG.get('fields:' + domain).catch(() => null);
-          if (raw) { try { fieldCfg = JSON.parse(raw); } catch(e) {} }
-        }
-        return new Response(renderWidget(fieldCfg, domain, placement), {
-          status: 200,
-          headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
-        });
-      }
+      // 3. Instalación real — solo cuando NO viene PLACEMENT
+      const isInstall = authToken && authToken.length > 10 &&
+                        !placement &&
+                        (status === 'F' || status === 'L' || !status);
+      if (isInstall) return handleInstall(request, event, url, corsHeaders, fdPeek);
 
-      // Instalación real — Bitrix manda auth[access_token] o ACCESS_TOKEN
       // Si llegó aquí sin ser install ni LEFT_MENU → responder welcome
 
     }
@@ -856,7 +830,12 @@ function renderInstallSuccess(tenant, domain) {
     '<p>Portal: ' + domain + '</p>' +
     '<p>Abre un Deal → pestaña Destinos</p>' +
     '<p>Configura los campos en el menu izquierdo → Destinos Config</p>' +
-    '<script>BX24.init(function(){ setTimeout(function(){ BX24.closeApplication(); }, 4000); });<\/script>' +
+    '<script>' +
+'BX24.init(function(){' +
+'  try { BX24.installFinish(); } catch(e) { console.error("installFinish error", e); }' +
+'  setTimeout(function(){ try { BX24.closeApplication(); } catch(e) {} }, 1500);' +
+'});' +
+'<\/script>' +
     '</body></html>';
 }
 
