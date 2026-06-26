@@ -115,26 +115,38 @@ async function handleRequest(request, event) {
   }
 
   // ── REBIND (re-registrar placements sin reinstalar) ──────
-  // ── CHECK placements registrados en Bitrix24 ────────────
-  if (path === '/check' && request.method === 'GET') {
+  // ── UNBIND por ID numérico ───────────────────────────────
+  if (path === '/unbindall' && request.method === 'GET') {
     const domain = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
     if (!domain) return new Response('Falta DOMAIN', { status: 400 });
     const oauth = await getOAuth(domain);
     if (!oauth?.auth?.access_token) return new Response(JSON.stringify({ error: 'OAuth no encontrado' }), { status: 404, headers: corsHeaders });
     const accessToken = oauth.auth.access_token;
     const restBase = 'https://' + domain + '/rest/';
-    const results = {};
+    // Primero obtener todos los placements registrados
+    const results = [];
     for (const p of ['CRM_DEAL_DETAIL_TAB', 'CRM_LEAD_DETAIL_TAB', 'LEFT_MENU']) {
       try {
-        const r = await fetch(restBase + 'placement.get.json?auth=' + encodeURIComponent(accessToken), {
+        const rGet = await fetch(restBase + 'placement.get.json?auth=' + encodeURIComponent(accessToken), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ PLACEMENT: p })
         });
-        const d = await r.json();
-        results[p] = d?.result || d?.error || d;
+        const dGet = await rGet.json();
+        const items = dGet?.result || [];
+        for (const item of items) {
+          if (!item.id) continue;
+          // Unbind por ID numérico
+          const rDel = await fetch(restBase + 'placement.unbind.json?auth=' + encodeURIComponent(accessToken), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ PLACEMENT: item.placement, HANDLER: item.handler, ID: item.id })
+          });
+          const dDel = await rDel.json();
+          results.push({ id: item.id, placement: item.placement, handler: item.handler, unbind: dDel?.result, error: dDel?.error });
+        }
       } catch(e) {
-        results[p] = { error: String(e) };
+        results.push({ placement: p, error: String(e) });
       }
     }
     return new Response(JSON.stringify({ domain, results }, null, 2), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
