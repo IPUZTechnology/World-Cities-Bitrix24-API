@@ -115,6 +115,31 @@ async function handleRequest(request, event) {
   }
 
   // ── REBIND (re-registrar placements sin reinstalar) ──────
+  // ── CHECK placements registrados en Bitrix24 ────────────
+  if (path === '/check' && request.method === 'GET') {
+    const domain = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
+    if (!domain) return new Response('Falta DOMAIN', { status: 400 });
+    const oauth = await getOAuth(domain);
+    if (!oauth?.auth?.access_token) return new Response(JSON.stringify({ error: 'OAuth no encontrado' }), { status: 404, headers: corsHeaders });
+    const accessToken = oauth.auth.access_token;
+    const restBase = 'https://' + domain + '/rest/';
+    const results = {};
+    for (const p of ['CRM_DEAL_DETAIL_TAB', 'CRM_LEAD_DETAIL_TAB', 'LEFT_MENU']) {
+      try {
+        const r = await fetch(restBase + 'placement.get.json?auth=' + encodeURIComponent(accessToken), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ PLACEMENT: p })
+        });
+        const d = await r.json();
+        results[p] = d?.result || d?.error || d;
+      } catch(e) {
+        results[p] = { error: String(e) };
+      }
+    }
+    return new Response(JSON.stringify({ domain, results }, null, 2), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
   if (path === '/rebind' && request.method === 'GET') {
     const domain = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
     if (!domain) return new Response('Falta DOMAIN', { status: 400 });
@@ -332,14 +357,12 @@ async function handleInstall(request, event, url, corsHeaders, fd) {
         tenant, domain: domain || null,
         auth: { access_token: accessToken, refresh_token: refreshToken || null, domain: domain || null, server_endpoint: serverEndpoint || null }
       };
-      // Guardar OAuth en KV
-      await TENANT_CONFIG.put('oauth:tenant:' + tenant, JSON.stringify(record));
+      event.waitUntil(TENANT_CONFIG.put('oauth:tenant:' + tenant, JSON.stringify(record)));
       if (domain) {
-        await TENANT_CONFIG.put('oauth:domain:' + domain, JSON.stringify(record));
-        await TENANT_CONFIG.put('tenant_domain:' + domain, tenant);
+        event.waitUntil(TENANT_CONFIG.put('oauth:domain:' + domain, JSON.stringify(record)));
+        event.waitUntil(TENANT_CONFIG.put('tenant_domain:' + domain, tenant));
       }
-      // Bind placements sincrónicamente con el token de instalación
-      await bindPlacements(domain, accessToken);
+      event.waitUntil(bindPlacements(domain, accessToken));
     }
 
     return new Response(renderInstallSuccess(tenant, domain), {
