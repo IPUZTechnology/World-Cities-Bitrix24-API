@@ -28,28 +28,23 @@ async function refreshOAuth(domain, oauth) {
   return oauth;
 }
 
-// ── Helper: leer OAuth desde KV — solo refresca si hay expires_in y está cerca ─
+// ── Helper: leer OAuth desde KV — solo refresca si está cerca de expirar ────────
 async function getOAuth(domain) {
   if (typeof TENANT_CONFIG === 'undefined') return null;
   const raw = await TENANT_CONFIG.get('oauth:domain:' + domain).catch(() => null);
   if (!raw) return null;
   let oauth = null;
   try { oauth = JSON.parse(raw); } catch(e) { return null; }
-  
-  // Solo refrescar si el token tiene expires_in y está a menos de 5 minutos de expirar
   const storedAt = oauth?.storedAt ? new Date(oauth.storedAt).getTime() : 0;
   const expiresIn = oauth?.auth?.expires_in ? Number(oauth.auth.expires_in) * 1000 : 3600000;
   const expiresAt = storedAt + expiresIn;
   const fiveMinutes = 5 * 60 * 1000;
-  const needsRefresh = storedAt > 0 && (Date.now() >= expiresAt - fiveMinutes);
-  
-  if (needsRefresh) {
+  if (storedAt > 0 && Date.now() >= expiresAt - fiveMinutes) {
     oauth = await refreshOAuth(domain, oauth);
   }
   return oauth;
 }
 
-// ── CRON TRIGGER — refresh all tokens every 30 min ──────
 addEventListener('scheduled', event => {
   event.waitUntil(refreshAllTenants());
 });
@@ -64,14 +59,11 @@ async function refreshAllTenants() {
       if (!raw) continue;
       let oauth = null;
       try { oauth = JSON.parse(raw); } catch(e) { continue; }
-      
       const refreshToken = oauth?.auth?.refresh_token;
       if (!refreshToken) continue;
-      
       const B24_CLIENT_ID = (typeof BITRIX_CLIENT_ID !== 'undefined' ? BITRIX_CLIENT_ID : '') || '';
       const B24_CLIENT_SECRET = (typeof CLIENT_SECRET !== 'undefined' ? CLIENT_SECRET : '') || '';
       if (!B24_CLIENT_ID || !B24_CLIENT_SECRET) continue;
-
       try {
         const r = await fetch(
           'https://oauth.bitrix.info/oauth/token/?grant_type=refresh_token' +
@@ -86,15 +78,13 @@ async function refreshAllTenants() {
           oauth.auth.refresh_token = rd.refresh_token || refreshToken;
           oauth.storedAt = new Date().toISOString();
           await TENANT_CONFIG.put(key.name, JSON.stringify(oauth));
-          // Update tenant key too
-          const tenantKey = 'oauth:tenant:' + (oauth.tenant || domain.split('.')[0]);
-          await TENANT_CONFIG.put(tenantKey, JSON.stringify(oauth)).catch(() => {});
-          console.log('Refreshed token for ' + domain);
+          await TENANT_CONFIG.put('oauth:tenant:' + (oauth.tenant || domain.split('.')[0]), JSON.stringify(oauth)).catch(() => {});
+          console.log('Cron refreshed token for ' + domain);
         } else {
-          console.error('Refresh failed for ' + domain + ':', JSON.stringify(rd));
+          console.error('Cron refresh failed for ' + domain + ':', JSON.stringify(rd));
         }
       } catch(e) {
-        console.error('Refresh error for ' + domain + ':', String(e));
+        console.error('Cron refresh error for ' + domain + ':', String(e));
       }
     }
   } catch(e) {
@@ -230,10 +220,9 @@ async function handleRequest(request, event) {
 
       const status = fdPeek ? String(fdPeek.get('status') || '').trim().toUpperCase() : '';
       console.log('POST_DEBUG', JSON.stringify({ placement, domain, authToken: authToken.substring(0,10), status, allKeys: fdPeek ? [...fdPeek.keys()] : [] }));
-      // Install real: status F/L + NO tiene DOMAIN en querystring
-      // LEFT_MENU: fue registrado con ?DOMAIN= en la URL, así que sí tiene DOMAIN en QS
-      const hasDomainInQS = !!url.searchParams.get('DOMAIN');
-      const isInstall = authToken && authToken.length > 10 && (status === 'F' || status === 'L') && !hasDomainInQS;
+      // Install real: tiene authToken largo + status F o L
+      // LEFT_MENU: tiene PLACEMENT en body o QS
+      const isInstall = authToken && authToken.length > 10 && (status === 'F' || status === 'L' || (!placement && !status));
 
       // Instalación real
       if (isInstall) return handleInstall(request, event, url, corsHeaders, fdPeek);
