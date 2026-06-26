@@ -119,9 +119,29 @@ async function handleRequest(request, event) {
     const domain = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
     if (!domain) return new Response('Falta DOMAIN', { status: 400 });
     const oauth = await getOAuth(domain);
-    if (!oauth?.auth?.access_token) return new Response('OAuth no encontrado para ' + domain, { status: 404 });
-    await bindPlacements(domain, oauth.auth.access_token);
-    return new Response('Placements re-registrados para ' + domain, { status: 200, headers: corsHeaders });
+    if (!oauth?.auth?.access_token) return new Response(JSON.stringify({ error: 'OAuth no encontrado para ' + domain }), { status: 404, headers: corsHeaders });
+    const accessToken = oauth.auth.access_token;
+    const restBase = 'https://' + domain + '/rest/';
+    const results = [];
+    const placements = [
+      { placement: 'CRM_DEAL_DETAIL_TAB', title: 'Destinos', handler: WORKER_URL },
+      { placement: 'CRM_LEAD_DETAIL_TAB', title: 'Destinos', handler: WORKER_URL },
+      { placement: 'LEFT_MENU', title: 'Destinos Config', handler: WORKER_URL + '?DOMAIN=' + encodeURIComponent(domain) }
+    ];
+    for (const p of placements) {
+      try {
+        const r = await fetch(restBase + 'placement.bind.json?auth=' + encodeURIComponent(accessToken), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ PLACEMENT: p.placement, HANDLER: p.handler, TITLE: p.title })
+        });
+        const d = await r.json();
+        results.push({ placement: p.placement, result: d?.result, error: d?.error, error_description: d?.error_description });
+      } catch(e) {
+        results.push({ placement: p.placement, error: String(e) });
+      }
+    }
+    return new Response(JSON.stringify({ domain, results }, null, 2), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
   // ── CONFIG SAVE API ──────────────────────────────────────
