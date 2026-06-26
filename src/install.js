@@ -332,12 +332,14 @@ async function handleInstall(request, event, url, corsHeaders, fd) {
         tenant, domain: domain || null,
         auth: { access_token: accessToken, refresh_token: refreshToken || null, domain: domain || null, server_endpoint: serverEndpoint || null }
       };
-      event.waitUntil(TENANT_CONFIG.put('oauth:tenant:' + tenant, JSON.stringify(record)));
+      // Guardar OAuth en KV
+      await TENANT_CONFIG.put('oauth:tenant:' + tenant, JSON.stringify(record));
       if (domain) {
-        event.waitUntil(TENANT_CONFIG.put('oauth:domain:' + domain, JSON.stringify(record)));
-        event.waitUntil(TENANT_CONFIG.put('tenant_domain:' + domain, tenant));
+        await TENANT_CONFIG.put('oauth:domain:' + domain, JSON.stringify(record));
+        await TENANT_CONFIG.put('tenant_domain:' + domain, tenant);
       }
-      event.waitUntil(bindPlacements(domain, accessToken));
+      // Bind placements sincrónicamente con el token de instalación
+      await bindPlacements(domain, accessToken);
     }
 
     return new Response(renderInstallSuccess(tenant, domain), {
@@ -354,20 +356,17 @@ async function bindPlacements(domain, accessToken) {
   const placements = [
     { placement: 'CRM_DEAL_DETAIL_TAB', title: 'Destinos', handler: WORKER_URL },
     { placement: 'CRM_LEAD_DETAIL_TAB', title: 'Destinos', handler: WORKER_URL },
+    // LEFT_MENU necesita DOMAIN en la URL para que el GET lo detecte correctamente
     { placement: 'LEFT_MENU', title: 'Destinos Config', handler: WORKER_URL + '?DOMAIN=' + encodeURIComponent(domain) }
   ];
   for (const p of placements) {
     try {
-      const r = await fetch(restBase + 'placement.bind.json?auth=' + encodeURIComponent(accessToken), {
+      await fetch(restBase + 'placement.bind.json?auth=' + encodeURIComponent(accessToken), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ PLACEMENT: p.placement, HANDLER: p.handler, TITLE: p.title })
       });
-      const d = await r.json();
-      console.log('BIND_RESULT', p.placement, JSON.stringify(d));
-    } catch(e) {
-      console.error('BIND_ERROR', p.placement, String(e));
-    }
+    } catch(e) {}
   }
 }
 
