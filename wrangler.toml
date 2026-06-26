@@ -6,3 +6,6 @@ compatibility_flags = ["nodejs_compat"]
 [[kv_namespaces]]
 binding = "TENANT_CONFIG"
 id = "e77e6fca25f74becbf65cdd57a9ebff2"
+
+[triggers]
+crons = ["*/30 * * * *"]
