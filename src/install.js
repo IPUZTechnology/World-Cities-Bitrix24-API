@@ -1,0 +1,871 @@
+const CITIES_URL = 'https://world-cities-bitrix24-api.pages.dev/src/cities.json';
+const WORKER_URL = 'https://world-cities-bitrix24.ripuz.workers.dev';
+
+// ── Refresh OAuth global — llamar antes de cualquier llamada a Bitrix ─────────
+async function refreshOAuth(domain, oauth) {
+  const refreshToken = oauth?.auth?.refresh_token;
+  const B24_CLIENT_ID = (typeof BITRIX_CLIENT_ID !== 'undefined' ? BITRIX_CLIENT_ID : '') || '';
+  const B24_CLIENT_SECRET = (typeof CLIENT_SECRET !== 'undefined' ? CLIENT_SECRET : '') || '';
+  if (!refreshToken || !B24_CLIENT_ID || !B24_CLIENT_SECRET) return oauth;
+  try {
+    const r = await fetch(
+      'https://oauth.bitrix.info/oauth/token/?grant_type=refresh_token' +
+      '&client_id=' + encodeURIComponent(B24_CLIENT_ID) +
+      '&client_secret=' + encodeURIComponent(B24_CLIENT_SECRET) +
+      '&refresh_token=' + encodeURIComponent(refreshToken),
+      { method: 'GET' }
+    );
+    const rd = await r.json();
+    if (rd?.access_token) {
+      oauth.auth.access_token = rd.access_token;
+      oauth.auth.refresh_token = rd.refresh_token || refreshToken;
+      oauth.storedAt = new Date().toISOString();
+      if (typeof TENANT_CONFIG !== 'undefined') {
+        await TENANT_CONFIG.put('oauth:domain:' + domain, JSON.stringify(oauth)).catch(() => {});
+      }
+    }
+  } catch(e) { console.error('refreshOAuth error', e); }
+  return oauth;
+}
+
+// ── Helper: leer OAuth desde KV — solo refresca si está cerca de expirar ────────
+async function getOAuth(domain) {
+  if (typeof TENANT_CONFIG === 'undefined') return null;
+  const raw = await TENANT_CONFIG.get('oauth:domain:' + domain).catch(() => null);
+  if (!raw) return null;
+  let oauth = null;
+  try { oauth = JSON.parse(raw); } catch(e) { return null; }
+  const storedAt = oauth?.storedAt ? new Date(oauth.storedAt).getTime() : 0;
+  const expiresIn = oauth?.auth?.expires_in ? Number(oauth.auth.expires_in) * 1000 : 3600000;
+  const expiresAt = storedAt + expiresIn;
+  const fiveMinutes = 5 * 60 * 1000;
+  if (storedAt > 0 && Date.now() >= expiresAt - fiveMinutes) {
+    oauth = await refreshOAuth(domain, oauth);
+  }
+  return oauth;
+}
+
+addEventListener('scheduled', event => {
+  event.waitUntil(refreshAllTenants());
+});
+
+async function refreshAllTenants() {
+  if (typeof TENANT_CONFIG === 'undefined') return;
+  try {
+    const list = await TENANT_CONFIG.list({ prefix: 'oauth:domain:' });
+    for (const key of list.keys) {
+      const domain = key.name.replace('oauth:domain:', '');
+      const raw = await TENANT_CONFIG.get(key.name).catch(() => null);
+      if (!raw) continue;
+      let oauth = null;
+      try { oauth = JSON.parse(raw); } catch(e) { continue; }
+      const refreshToken = oauth?.auth?.refresh_token;
+      if (!refreshToken) continue;
+      const B24_CLIENT_ID = (typeof BITRIX_CLIENT_ID !== 'undefined' ? BITRIX_CLIENT_ID : '') || '';
+      const B24_CLIENT_SECRET = (typeof CLIENT_SECRET !== 'undefined' ? CLIENT_SECRET : '') || '';
+      if (!B24_CLIENT_ID || !B24_CLIENT_SECRET) continue;
+      try {
+        const r = await fetch(
+          'https://oauth.bitrix.info/oauth/token/?grant_type=refresh_token' +
+          '&client_id=' + encodeURIComponent(B24_CLIENT_ID) +
+          '&client_secret=' + encodeURIComponent(B24_CLIENT_SECRET) +
+          '&refresh_token=' + encodeURIComponent(refreshToken),
+          { method: 'GET' }
+        );
+        const rd = await r.json();
+        if (rd?.access_token) {
+          oauth.auth.access_token = rd.access_token;
+          oauth.auth.refresh_token = rd.refresh_token || refreshToken;
+          oauth.storedAt = new Date().toISOString();
+          await TENANT_CONFIG.put(key.name, JSON.stringify(oauth));
+          await TENANT_CONFIG.put('oauth:tenant:' + (oauth.tenant || domain.split('.')[0]), JSON.stringify(oauth)).catch(() => {});
+          console.log('Cron refreshed token for ' + domain);
+        } else {
+          console.error('Cron refresh failed for ' + domain + ':', JSON.stringify(rd));
+        }
+      } catch(e) {
+        console.error('Cron refresh error for ' + domain + ':', String(e));
+      }
+    }
+  } catch(e) {
+    console.error('refreshAllTenants error:', String(e));
+  }
+}
+
+addEventListener('fetch', event => {
+  event.respondWith(handleRequest(event.request, event));
+});
+
+async function handleRequest(request, event) {
+  const url = new URL(request.url);
+  const path = url.pathname.replace(/\/+$/, '');
+
+  const corsHeaders = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+
+  if (path.includes('cities.json')) {
+    return fetch(CITIES_URL);
+  }
+
+  // ── REBIND (re-registrar placements sin reinstalar) ──────
+  // ── UNBIND por ID numérico ───────────────────────────────
+  // ── CHECK placements en Bitrix24 ────────────────────────
+  if (path === '/check' && request.method === 'GET') {
+    const domain = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
+    if (!domain) return new Response('Falta DOMAIN', { status: 400 });
+    const oauth = await getOAuth(domain);
+    if (!oauth?.auth?.access_token) return new Response(JSON.stringify({ error: 'OAuth no encontrado' }), { status: 404, headers: corsHeaders });
+    const accessToken = oauth.auth.access_token;
+    const restBase = 'https://' + domain + '/rest/';
+    const results = {};
+    for (const p of ['CRM_DEAL_DETAIL_TAB', 'CRM_LEAD_DETAIL_TAB', 'LEFT_MENU']) {
+      try {
+        const r = await fetch(restBase + 'placement.get.json?auth=' + encodeURIComponent(accessToken), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ PLACEMENT: p })
+        });
+        const d = await r.json();
+        results[p] = d?.result || d?.error || d;
+      } catch(e) {
+        results[p] = { error: String(e) };
+      }
+    }
+    return new Response(JSON.stringify({ domain, results }, null, 2), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
+  if (path === '/unbindall' && request.method === 'GET') {
+    const domain = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
+    if (!domain) return new Response('Falta DOMAIN', { status: 400 });
+    const oauth = await getOAuth(domain);
+    if (!oauth?.auth?.access_token) return new Response(JSON.stringify({ error: 'OAuth no encontrado' }), { status: 404, headers: corsHeaders });
+    const accessToken = oauth.auth.access_token;
+    const restBase = 'https://' + domain + '/rest/';
+    // Primero obtener todos los placements registrados
+    const results = [];
+    for (const p of ['CRM_DEAL_DETAIL_TAB', 'CRM_LEAD_DETAIL_TAB', 'LEFT_MENU']) {
+      try {
+        const rGet = await fetch(restBase + 'placement.get.json?auth=' + encodeURIComponent(accessToken), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ PLACEMENT: p })
+        });
+        const dGet = await rGet.json();
+        const items = dGet?.result || [];
+        for (const item of items) {
+          if (!item.id) continue;
+          // Unbind por ID numérico
+          const rDel = await fetch(restBase + 'placement.unbind.json?auth=' + encodeURIComponent(accessToken), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ PLACEMENT: item.placement, HANDLER: item.handler, ID: item.id })
+          });
+          const dDel = await rDel.json();
+          results.push({ id: item.id, placement: item.placement, handler: item.handler, unbind: dDel?.result, error: dDel?.error });
+        }
+      } catch(e) {
+        results.push({ placement: p, error: String(e) });
+      }
+    }
+    return new Response(JSON.stringify({ domain, results }, null, 2), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
+  if (path === '/rebind' && request.method === 'GET') {
+    const domain = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
+    if (!domain) return new Response('Falta DOMAIN', { status: 400 });
+    const oauth = await getOAuth(domain);
+    if (!oauth?.auth?.access_token) return new Response(JSON.stringify({ error: 'OAuth no encontrado para ' + domain }), { status: 404, headers: corsHeaders });
+    const accessToken = oauth.auth.access_token;
+    const restBase = 'https://' + domain + '/rest/';
+    const results = [];
+    const placements = [
+      { placement: 'CRM_DEAL_DETAIL_TAB', title: 'Destinos', handler: WORKER_URL },
+      { placement: 'CRM_LEAD_DETAIL_TAB', title: 'Destinos', handler: WORKER_URL },
+      { placement: 'LEFT_MENU', title: 'Destinos Config', handler: WORKER_URL + '?DOMAIN=' + encodeURIComponent(domain) }
+    ];
+    for (const p of placements) {
+      try {
+        const r = await fetch(restBase + 'placement.bind.json?auth=' + encodeURIComponent(accessToken), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ PLACEMENT: p.placement, HANDLER: p.handler, TITLE: p.title })
+        });
+        const d = await r.json();
+        results.push({ placement: p.placement, result: d?.result, error: d?.error, error_description: d?.error_description });
+      } catch(e) {
+        results.push({ placement: p.placement, error: String(e) });
+      }
+    }
+    return new Response(JSON.stringify({ domain, results }, null, 2), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
+  // ── CONFIG SAVE API ──────────────────────────────────────
+  if (path === '/config' && request.method === 'POST') {
+    return handleConfigSave(request, corsHeaders);
+  }
+
+  if (path === '/fields' && request.method === 'GET') {
+    const domain = String(url.searchParams.get('domain') || url.searchParams.get('DOMAIN') || '').trim().toLowerCase();
+    const entity = String(url.searchParams.get('entity') || 'deal').trim().toLowerCase();
+    if (!domain) return new Response(JSON.stringify({ ok: false, error: 'Falta domain' }), { status: 400, headers: corsHeaders });
+
+    const oauth = await getOAuth(domain);
+    if (!oauth?.auth?.access_token) {
+      return new Response(JSON.stringify({ ok: false, error: 'OAuth no encontrado para ' + domain }), { status: 404, headers: corsHeaders });
+    }
+
+    const accessToken = oauth.auth.access_token;
+    const restBase = 'https://' + domain + '/rest/';
+    const fieldsMethod = entity === 'lead' ? 'crm.lead.fields.json' : 'crm.deal.fields.json';
+
+    try {
+      const r2 = await fetch(restBase + fieldsMethod + '?auth=' + encodeURIComponent(accessToken), {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
+      });
+      const d2 = await r2.json();
+      const rawFields = d2?.result || {};
+      const ufKeys = Object.keys(rawFields).filter(k => k.indexOf('UF_CRM') === 0);
+
+      const fields = ufKeys.map(key => {
+        const f = rawFields[key];
+        const label = (f.listLabel && f.listLabel.trim() && f.listLabel !== key)
+          ? f.listLabel.trim()
+          : (f.formLabel && f.formLabel.trim() && f.formLabel !== key)
+            ? f.formLabel.trim()
+            : (f.filterLabel && f.filterLabel.trim() && f.filterLabel !== key)
+              ? f.filterLabel.trim()
+              : key;
+        return { id: key, label };
+      }).sort((a, b) => a.label.localeCompare(b.label));
+
+      return new Response(JSON.stringify({ 
+        ok: true, fields, entity,
+        _debug: { totalKeys: Object.keys(rawFields).length, ufKeys: ufKeys.length, sampleKey: Object.keys(rawFields)[0], bitrixError: d2?.error || null }
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    } catch(e) {
+      return new Response(JSON.stringify({ ok: false, error: String(e) }), { status: 500, headers: corsHeaders });
+    }
+  }
+
+  if (path === '/refresh' && request.method === 'GET') {
+    const domain = String(url.searchParams.get('domain') || '').trim().toLowerCase();
+    const rawOauth = await TENANT_CONFIG.get('oauth:domain:' + domain).catch(() => null);
+    let oauth = null;
+    try { oauth = JSON.parse(rawOauth); } catch(e) {}
+    const refreshToken = oauth?.auth?.refresh_token;
+    const B24_CLIENT_ID = (typeof BITRIX_CLIENT_ID !== 'undefined' ? BITRIX_CLIENT_ID : '') || '';
+    const B24_CLIENT_SECRET = (typeof CLIENT_SECRET !== 'undefined' ? CLIENT_SECRET : '') || '';
+    let refreshResult = null;
+    if (refreshToken && B24_CLIENT_ID && B24_CLIENT_SECRET) {
+      try {
+        const rr = await fetch(
+          'https://oauth.bitrix.info/oauth/token/?grant_type=refresh_token' +
+          '&client_id=' + encodeURIComponent(B24_CLIENT_ID) +
+          '&client_secret=' + encodeURIComponent(B24_CLIENT_SECRET) +
+          '&refresh_token=' + encodeURIComponent(refreshToken),
+          { method: 'GET' }
+        );
+        refreshResult = await rr.json();
+      } catch(e) { refreshResult = { error: String(e) }; }
+    }
+    return new Response(JSON.stringify({
+      domain,
+      storedAt: oauth?.storedAt,
+      clientId: B24_CLIENT_ID ? 'OK:' + B24_CLIENT_ID.substring(0,8) : 'MISSING',
+      clientSecret: B24_CLIENT_SECRET ? 'OK' : 'MISSING',
+      hasRefreshToken: !!refreshToken,
+      refreshResult
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  }
+
+  // ── MAIN HANDLER (install + widget) ─────────────────────
+  if (path === '' || path === '/' || path === '/install') {
+    if (request.method === 'POST') {
+      const fdPeek = await request.clone().formData().catch(() => null);
+      // Bitrix24 puede enviar PLACEMENT en querystring o en body
+      const placementQS = String(url.searchParams.get('PLACEMENT') || url.searchParams.get('placement') || '').trim();
+      const placementBody = fdPeek ? String(fdPeek.get('PLACEMENT') || fdPeek.get('placement') || '').trim() : '';
+      const placement = placementQS || placementBody;
+      const domainQS = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
+      const domainBody = fdPeek ? String(fdPeek.get('DOMAIN') || fdPeek.get('domain') || '').trim().toLowerCase() : '';
+      const domain = domainBody || domainQS;
+      const authToken = fdPeek ? String(fdPeek.get('AUTH_ID') || fdPeek.get('auth[access_token]') || fdPeek.get('access_token') || '').trim() : '';
+
+      const status = fdPeek ? String(fdPeek.get('status') || '').trim().toUpperCase() : '';
+      console.log('POST_DEBUG', JSON.stringify({ placement, domain, authToken: authToken.substring(0,10), status, allKeys: fdPeek ? [...fdPeek.keys()] : [] }));
+      // Install real: tiene authToken largo + status F o L
+      // LEFT_MENU: tiene PLACEMENT en body o QS
+      const isInstall = authToken && authToken.length > 10 && (status === 'F' || status === 'L' || (!placement && !status));
+
+      // Instalación real
+      if (isInstall) return handleInstall(request, event, url, corsHeaders, fdPeek);
+
+      // DEFAULT con status != L → LEFT_MENU o widget apertura
+      const isLeftMenu = placement === 'DEFAULT' || placement === 'LEFT_MENU' ||
+                         placement.toLowerCase().includes('left') || placement.toLowerCase().includes('menu');
+      if (isLeftMenu) {
+        let fieldCfg = { destinos: '', pais: '', region: '', lead_destinos: '', lead_pais: '', lead_region: '' };
+        if (typeof TENANT_CONFIG !== 'undefined' && domain) {
+          // Cargar config de deal
+          const rawDeal = await TENANT_CONFIG.get('fields:' + domain + ':deal').catch(() => null)
+                       || await TENANT_CONFIG.get('fields:' + domain).catch(() => null);
+          if (rawDeal) { try { const d = JSON.parse(rawDeal); fieldCfg.destinos = d.destinos||''; fieldCfg.pais = d.pais||''; fieldCfg.region = d.region||''; } catch(e) {} }
+          // Cargar config de lead
+          const rawLead = await TENANT_CONFIG.get('fields:' + domain + ':lead').catch(() => null);
+          if (rawLead) { try { const l = JSON.parse(rawLead); fieldCfg.lead_destinos = l.destinos||''; fieldCfg.lead_pais = l.pais||''; fieldCfg.lead_region = l.region||''; } catch(e) {} }
+        }
+        return new Response(renderSettingsPage(fieldCfg, domain), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
+        });
+      }
+
+      // Deal/Lead → widget
+      if (placement && (placement.includes('DEAL') || placement.includes('LEAD'))) {
+        let fieldCfg = { destinos: '', pais: '', region: '' };
+        if (typeof TENANT_CONFIG !== 'undefined' && domain) {
+          const raw = await TENANT_CONFIG.get('fields:' + domain).catch(() => null);
+          if (raw) { try { fieldCfg = JSON.parse(raw); } catch(e) {} }
+        }
+        return new Response(renderWidget(fieldCfg, domain, placement), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
+        });
+      }
+
+      // Instalación real — Bitrix manda auth[access_token] o ACCESS_TOKEN
+      // Si llegó aquí sin ser install ni LEFT_MENU → responder welcome
+
+    }
+
+    // GET con DOMAIN → LEFT_MENU o app abierta → settings
+    const getDomain = String(url.searchParams.get('DOMAIN') || url.searchParams.get('domain') || '').trim().toLowerCase();
+    if (getDomain) {
+      let fieldCfg = { destinos: '', pais: '', region: '' };
+      if (typeof TENANT_CONFIG !== 'undefined') {
+        const raw = await TENANT_CONFIG.get('fields:' + getDomain).catch(() => null);
+        if (raw) { try { fieldCfg = JSON.parse(raw); } catch(e) {} }
+      }
+      return new Response(renderSettingsPage(fieldCfg, getDomain), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
+      });
+    }
+    return new Response(renderWelcomePage(), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
+    });
+  }
+
+  return new Response('Not found', { status: 404 });
+}
+
+// ── INSTALL ──────────────────────────────────────────────
+async function handleInstall(request, event, url, corsHeaders, fd) {
+  try {
+    if (!fd) fd = await request.formData().catch(() => null);
+    if (!fd) return new Response(renderWelcomePage(), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' } });
+
+    const domain = String(fd.get('DOMAIN') || fd.get('domain') || url.searchParams.get('DOMAIN') || '').trim().toLowerCase();
+    const accessToken = String(fd.get('AUTH_ID') || fd.get('auth[access_token]') || fd.get('access_token') || '').trim();
+    const refreshToken = String(fd.get('REFRESH_ID') || fd.get('auth[refresh_token]') || fd.get('refresh_token') || '').trim();
+    const serverEndpoint = String(fd.get('SERVER_ENDPOINT') || fd.get('server_endpoint') || '').trim();
+
+    // DEBUG temporal — ver qué campos manda Bitrix en el install
+    const allKeys = [];
+    for (const [k, v] of fd.entries()) { allKeys.push(k + '=' + String(v).substring(0, 30)); }
+    console.log('INSTALL_DEBUG', JSON.stringify({ domain, accessToken: accessToken.substring(0,10), allKeys }));
+
+    const m = domain.match(/^([a-z0-9-]+)\.bitrix24\.[a-z]{2,}$/i);
+    const tenant = (m && m[1]) ? m[1].toLowerCase() : domain.toLowerCase();
+
+    if (accessToken && typeof TENANT_CONFIG !== 'undefined') {
+      const record = {
+        storedAt: new Date().toISOString(),
+        tenant, domain: domain || null,
+        auth: { access_token: accessToken, refresh_token: refreshToken || null, domain: domain || null, server_endpoint: serverEndpoint || null }
+      };
+      event.waitUntil(TENANT_CONFIG.put('oauth:tenant:' + tenant, JSON.stringify(record)));
+      if (domain) {
+        event.waitUntil(TENANT_CONFIG.put('oauth:domain:' + domain, JSON.stringify(record)));
+        event.waitUntil(TENANT_CONFIG.put('tenant_domain:' + domain, tenant));
+      }
+      event.waitUntil(bindPlacements(domain, accessToken));
+    }
+
+    return new Response(renderInstallSuccess(tenant, domain), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' }
+    });
+  } catch(e) {
+    return new Response('<h3>Error: ' + String(e) + '</h3>', { status: 200, headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' } });
+  }
+}
+
+async function bindPlacements(domain, accessToken) {
+  const restBase = 'https://' + domain + '/rest/';
+  const placements = [
+    { placement: 'CRM_DEAL_DETAIL_TAB', title: 'Destinos', handler: WORKER_URL },
+    { placement: 'CRM_LEAD_DETAIL_TAB', title: 'Destinos', handler: WORKER_URL },
+    // LEFT_MENU necesita DOMAIN en la URL para que el GET lo detecte correctamente
+    { placement: 'LEFT_MENU', title: 'Destinos Config', handler: WORKER_URL + '?DOMAIN=' + encodeURIComponent(domain) }
+  ];
+  for (const p of placements) {
+    try {
+      await fetch(restBase + 'placement.bind.json?auth=' + encodeURIComponent(accessToken), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ PLACEMENT: p.placement, HANDLER: p.handler, TITLE: p.title })
+      });
+    } catch(e) {}
+  }
+}
+
+// ── CONFIG SAVE ──────────────────────────────────────────
+async function handleConfigSave(request, corsHeaders) {
+  try {
+    const body = await request.json();
+    const domain = String(body.domain || '').trim().toLowerCase();
+    const entity = String(body.entity || 'deal').trim().toLowerCase();
+    if (!domain) return new Response(JSON.stringify({ ok: false, error: 'No domain' }), { status: 400, headers: corsHeaders });
+    if (typeof TENANT_CONFIG !== 'undefined') {
+      // Guardar por entidad: fields:domain:deal y fields:domain:lead
+      const key = 'fields:' + domain + ':' + entity;
+      await TENANT_CONFIG.put(key, JSON.stringify({
+        destinos: body.destinos || '',
+        pais: body.pais || '',
+        region: body.region || ''
+      }));
+      // Compatibilidad: también guardar en key legacy fields:domain para deal
+      if (entity === 'deal') {
+        await TENANT_CONFIG.put('fields:' + domain, JSON.stringify({
+          destinos: body.destinos || '',
+          pais: body.pais || '',
+          region: body.region || ''
+        }));
+      }
+    }
+    return new Response(JSON.stringify({ ok: true }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+  } catch(e) {
+    return new Response(JSON.stringify({ ok: false, error: String(e) }), { status: 500, headers: corsHeaders });
+  }
+}
+
+// ── SETTINGS PAGE (LEFT_MENU) ────────────────────────────
+function renderSettingsPage(fieldCfg, domain) {
+  return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<script src="//api.bitrix24.com/api/v1/"><\/script>' +
+    '<style>' +
+    '* { box-sizing: border-box; margin: 0; padding: 0; }' +
+    'body { font-family: Arial, sans-serif; font-size: 14px; color: #333; background: #fff; }' +
+    '.hero { width: 100%; height: 180px; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 40%, #0f3460 70%, #533483 100%); display: flex; align-items: center; justify-content: center; flex-direction: column; position: relative; overflow: hidden; }' +
+    '.hero-circles { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }' +
+    '.hero-circle { position: absolute; border-radius: 50%; border: 1px solid rgba(255,255,255,0.1); }' +
+    '.hero-title { color: #fff; font-size: 22px; font-weight: 700; letter-spacing: 2px; z-index: 1; }' +
+    '.hero-sub { color: rgba(255,255,255,0.7); font-size: 12px; margin-top: 6px; z-index: 1; letter-spacing: 1px; }' +
+    '.hero-icon { font-size: 36px; margin-bottom: 8px; z-index: 1; }' +
+    '.content { padding: 24px; }' +
+    '.entity-tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 2px solid #eee; }' +
+    '.etab { padding: 8px 24px; font-size: 13px; font-weight: 600; color: #888; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all .15s; }' +
+    '.etab.active { color: #5b6cf6; border-bottom-color: #5b6cf6; }' +
+    '.etab:hover { color: #5b6cf6; }' +
+    'h3 { font-size: 14px; font-weight: 600; color: #555; margin-bottom: 16px; text-transform: uppercase; letter-spacing: .5px; }' +
+    '.srow { margin-bottom: 14px; }' +
+    '.srow label { display: block; font-size: 12px; color: #666; margin-bottom: 5px; font-weight: 500; }' +
+    '.btn-save { background: linear-gradient(135deg, #5b6cf6, #7c3aed); color: #fff; border: none; border-radius: 8px; padding: 12px 20px; font-size: 14px; font-weight: 600; cursor: pointer; width: 100%; margin-top: 8px; }' +
+    '.btn-save:hover { opacity: 0.9; }' +
+    '.btn-save:disabled { background: #bbb; cursor: not-allowed; }' +
+    '#cfg-status { margin-top: 12px; font-size: 13px; text-align: center; min-height: 20px; padding: 8px; border-radius: 6px; }' +
+    '.msg-ok { color: #2d9e5f; background: #f0faf5; }' +
+    '.msg-err { color: #e05555; background: #fff5f5; }' +
+    '.hint { font-size: 11px; color: #aaa; margin-top: 4px; }' +
+    '.field-select { width:100%; padding:8px 12px; border:1px solid #ddd; border-radius:8px; font-size:13px; background:#fff; }' +
+    '.fs-wrap { position:relative; }' +
+    '.fs-input { width:100%; padding:8px 12px; border:1px solid #ddd; border-radius:8px; font-size:13px; box-sizing:border-box; }' +
+    '.fs-input:focus { outline:none; border-color:#5b6cf6; box-shadow:0 0 0 2px rgba(91,108,246,.12); }' +
+    '.fs-drop { display:none; position:absolute; top:100%; left:0; right:0; z-index:999; background:#fff; border:1px solid #ddd; border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,.12); max-height:200px; overflow-y:auto; margin-top:2px; }' +
+    '.fs-drop.open { display:block; }' +
+    '.fs-item { padding:8px 12px; cursor:pointer; font-size:13px; border-bottom:1px solid #f5f5f5; }' +
+    '.fs-item:hover { background:#f0f2ff; }' +
+    '.fs-item .fs-label { font-weight:500; color:#333; }' +
+    '.fs-item .fs-code { font-size:10px; color:#aaa; margin-left:6px; }' +
+    '.fs-empty { padding:10px 12px; color:#aaa; font-size:12px; }' +
+    '</style></head><body>' +
+    '<div class="hero">' +
+    '<div class="hero-circles">' +
+    '<div class="hero-circle" style="width:200px;height:200px;top:-50px;right:-50px"></div>' +
+    '<div class="hero-circle" style="width:120px;height:120px;bottom:-30px;left:30px"></div>' +
+    '<div class="hero-circle" style="width:80px;height:80px;top:20px;left:60px"></div>' +
+    '</div>' +
+    '<div class="hero-icon">🌍</div>' +
+    '<div class="hero-title">DESTINOS</div>' +
+    '<div class="hero-sub">World Cities · RIPUZ</div>' +
+    '</div>' +
+    '<div class="content">' +
+    '<div class="entity-tabs">' +
+    '<div class="etab active" id="tab-deal" onclick="switchEntity(\'deal\')">🤝 Deal</div>' +
+    '<div class="etab" id="tab-lead" onclick="switchEntity(\'lead\')">📋 Lead</div>' +
+    '</div>' +
+    '<h3 id="cfg-title">Configuración de campos — Deal</h3>' +
+    '<div class="srow">' +
+    '<label>Campo Destinos / Ciudades</label>' +
+    '<div class="fs-wrap"><input class="fs-input" id="f-destinos-input" placeholder="Buscar campo..." autocomplete="off"><input type="hidden" id="f-destinos"><div class="fs-drop" id="f-destinos-drop"></div></div>' +
+    '<div class="hint">Campo tipo string múltiple</div>' +
+    '</div>' +
+    '<div class="srow">' +
+    '<label>Campo País</label>' +
+    '<div class="fs-wrap"><input class="fs-input" id="f-pais-input" placeholder="Buscar campo..." autocomplete="off"><input type="hidden" id="f-pais"><div class="fs-drop" id="f-pais-drop"></div></div>' +
+    '<div class="hint">Campo tipo string múltiple</div>' +
+    '</div>' +
+    '<div class="srow">' +
+    '<label>Campo Región</label>' +
+    '<div class="fs-wrap"><input class="fs-input" id="f-region-input" placeholder="Buscar campo..." autocomplete="off"><input type="hidden" id="f-region"><div class="fs-drop" id="f-region-drop"></div></div>' +
+    '<div class="hint">Campo tipo string múltiple</div>' +
+    '</div>' +
+    '<button class="btn-save" onclick="saveConfig()" id="btn-save">Guardar configuración</button>' +
+    '<div id="cfg-status"></div>' +
+    '</div>' +
+
+    '<script>' +
+    'var WORKER_URL = ' + JSON.stringify(WORKER_URL) + ';' +
+    'var DOMAIN = ' + JSON.stringify(domain) + ';' +
+    'var currentEntity = "deal";' +
+    'var cfgByEntity = {' +
+    '  deal: { destinos: ' + JSON.stringify(fieldCfg.destinos||'') + ', pais: ' + JSON.stringify(fieldCfg.pais||'') + ', region: ' + JSON.stringify(fieldCfg.region||'') + ' },' +
+    '  lead: { destinos: ' + JSON.stringify(fieldCfg.lead_destinos||'') + ', pais: ' + JSON.stringify(fieldCfg.lead_pais||'') + ', region: ' + JSON.stringify(fieldCfg.lead_region||'') + ' }' +
+    '};' +
+    'var fieldsByEntity = { deal: [], lead: [] };' +
+    'BX24.init(function() {' +
+    '  if (!DOMAIN) DOMAIN = String(BX24.getDomain ? BX24.getDomain() : "");' +
+    '  initSearchers();' +
+    '  loadFields("deal");' +
+    '  loadFields("lead");' +
+    '});' +
+    'setTimeout(function() {' +
+    '  if (fieldsByEntity.deal.length || fieldsByEntity.lead.length) return;' +
+    '  try { if (!DOMAIN && BX24.getDomain) DOMAIN = String(BX24.getDomain()); } catch(e) {}' +
+    '  initSearchers();' +
+    '  loadFields("deal");' +
+    '  loadFields("lead");' +
+    '}, 1500);' +
+    'function switchEntity(entity) {' +
+    '  currentEntity = entity;' +
+    '  document.getElementById("tab-deal").className = "etab" + (entity==="deal"?" active":"");' +
+    '  document.getElementById("tab-lead").className = "etab" + (entity==="lead"?" active":"");' +
+    '  document.getElementById("cfg-title").textContent = "Configuraci\u00f3n de campos \u2014 " + (entity==="deal"?"Deal":"Lead");' +
+    '  var cfg = cfgByEntity[entity] || {};' +
+    '  var fields = fieldsByEntity[entity] || [];' +
+    '  setSearcherValue("f-destinos", fields, cfg.destinos||"");' +
+    '  setSearcherValue("f-pais", fields, cfg.pais||"");' +
+    '  setSearcherValue("f-region", fields, cfg.region||"");' +
+    '}' +
+    'function loadFields(entity) {' +
+    '  if (!DOMAIN) return;' +
+    '  fetch(WORKER_URL + "/fields?domain=" + encodeURIComponent(DOMAIN) + "&entity=" + entity)' +
+    '  .then(function(r){ return r.json(); })' +
+    '  .then(function(data) {' +
+    '    if (!data.ok || !data.fields) return;' +
+    '    fieldsByEntity[entity] = data.fields;' +
+    '    if (entity === currentEntity) {' +
+    '      var cfg = cfgByEntity[entity] || {};' +
+    '      setSearcherValue("f-destinos", data.fields, cfg.destinos||"");' +
+    '      setSearcherValue("f-pais", data.fields, cfg.pais||"");' +
+    '      setSearcherValue("f-region", data.fields, cfg.region||"");' +
+    '    }' +
+    '  }).catch(function(e){ console.error("loadFields error", e); });' +
+    '}' +
+    'function initSearchers() {' +
+    '  ["f-destinos","f-pais","f-region"].forEach(function(id) {' +
+    '    var inp = document.getElementById(id+"-input");' +
+    '    var drop = document.getElementById(id+"-drop");' +
+    '    if (!inp || !drop) return;' +
+    '    inp.addEventListener("input", function() { renderDrop(id, inp.value.trim()); });' +
+    '    inp.addEventListener("focus", function() { renderDrop(id, inp.value.trim()); });' +
+    '    document.addEventListener("click", function(e) {' +
+    '      if (!inp.contains(e.target) && !drop.contains(e.target)) drop.classList.remove("open");' +
+    '    });' +
+    '  });' +
+    '}' +
+    'function renderDrop(id, q) {' +
+    '  var drop = document.getElementById(id+"-drop");' +
+    '  var fields = fieldsByEntity[currentEntity] || [];' +
+    '  var filtered = q ? fields.filter(function(f){ return (f.label+f.id).toLowerCase().indexOf(q.toLowerCase()) >= 0; }) : fields;' +
+    '  if (!filtered.length) { drop.innerHTML = \'<div class="fs-empty">Sin resultados</div>\'; drop.classList.add("open"); return; }' +
+    '  drop.innerHTML = filtered.map(function(f) {' +
+    '    return \'<div class="fs-item" onclick="pickField(\\\'\' + id + \'\\\',\\\'\' + f.id + \'\\\',\\\'\' + f.label.replace(/\'/g,"") + \'\\\')">\' +' +
+    '      \'<span class="fs-label">\' + f.label + \'</span><span class="fs-code">\' + f.id + \'</span></div>\';' +
+    '  }).join("");' +
+    '  drop.classList.add("open");' +
+    '}' +
+    'function pickField(id, fieldId, label) {' +
+    '  document.getElementById(id).value = fieldId;' +
+    '  document.getElementById(id+"-input").value = label + " \u2014 " + fieldId;' +
+    '  document.getElementById(id+"-drop").classList.remove("open");' +
+    '}' +
+    'function setSearcherValue(id, fields, currentVal) {' +
+    '  var hid = document.getElementById(id);' +
+    '  var inp = document.getElementById(id+"-input");' +
+    '  if (!hid || !inp) return;' +
+    '  hid.value = currentVal;' +
+    '  if (currentVal) {' +
+    '    var f = fields.find(function(x){ return x.id === currentVal; });' +
+    '    inp.value = f ? (f.label + " \u2014 " + f.id) : currentVal;' +
+    '  } else { inp.value = ""; }' +
+    '}' +
+    'function saveConfig() {' +
+    '  var d = document.getElementById("f-destinos").value.trim();' +
+    '  var p = document.getElementById("f-pais").value.trim();' +
+    '  var r = document.getElementById("f-region").value.trim();' +
+    '  if (!d || !p || !r) { showStatus("Completa los 3 campos.", "err"); return; }' +
+    '  cfgByEntity[currentEntity] = { destinos: d, pais: p, region: r };' +
+    '  var btn = document.getElementById("btn-save");' +
+    '  btn.disabled = true; btn.textContent = "Guardando...";' +
+    '  fetch(WORKER_URL + "/config", {' +
+    '    method: "POST",' +
+    '    headers: { "Content-Type": "application/json" },' +
+    '    body: JSON.stringify({ domain: DOMAIN, entity: currentEntity, destinos: d, pais: p, region: r })' +
+    '  }).then(function(res){ return res.json(); })' +
+    '  .then(function(j) {' +
+    '    btn.disabled = false; btn.textContent = "Guardar configuración";' +
+    '    if (j.ok) { showStatus("\u2713 Guardado para " + (currentEntity==="deal"?"Deal":"Lead"), "ok"); }' +
+    '    else { showStatus("Error: " + (j.error||""), "err"); }' +
+    '  }).catch(function(e) {' +
+    '    btn.disabled = false; btn.textContent = "Guardar configuración";' +
+    '    showStatus("Error de conexión", "err");' +
+    '  });' +
+    '}' +
+    'function showStatus(msg, type) {' +
+    '  var el = document.getElementById("cfg-status");' +
+    '  el.textContent = msg;' +
+    '  el.className = type === "ok" ? "msg-ok" : "msg-err";' +
+    '}' +
+    '<\/script></body></html>';
+}
+
+// ── WIDGET (Deal/Lead tab) ───────────────────────────────
+function renderWidget(fieldCfg, domain, placement) {
+  placement = placement || '';
+  return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<script src="//api.bitrix24.com/api/v1/"><\/script>' +
+    '<style>' +
+    '* { box-sizing: border-box; margin: 0; padding: 0; }' +
+    'body { font-family: Arial, sans-serif; font-size: 14px; color: #333; background: #fff; padding: 12px; }' +
+    '#loading { text-align: center; padding: 20px; color: #aaa; font-size: 13px; }' +
+    '.sw { position: relative; margin-bottom: 4px; }' +
+    '.sw input { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 13px; }' +
+    '.sw input:focus { outline: none; border-color: #5b6cf6; box-shadow: 0 0 0 2px rgba(91,108,246,.12); }' +
+    '#dropdown { display: none; position: absolute; z-index: 9999; background: #fff; border: 1px solid #ddd; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.1); max-height: 200px; overflow-y: auto; width: 100%; margin-top: 4px; }' +
+    '.di { padding: 8px 12px; cursor: pointer; font-size: 13px; border-bottom: 1px solid #f0f0f0; }' +
+    '.di:last-child { border-bottom: none; }' +
+    '.di:hover { background: #f0f2ff; }' +
+    '.dc { font-weight: 600; color: #333; }' +
+    '.dm { font-size: 11px; color: #888; margin-top: 1px; }' +
+    '.de { padding: 12px; text-align: center; color: #aaa; font-size: 12px; }' +
+    '#tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; min-height: 4px; }' +
+    '.tag { display: flex; align-items: center; gap: 5px; background: #eef0ff; border: 1px solid #c5caff; border-radius: 20px; padding: 4px 10px; font-size: 12px; color: #3a47c9; }' +
+    '.tag span { max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }' +
+    '.tr { cursor: pointer; color: #8891e0; font-size: 14px; line-height: 1; margin-left: 2px; }' +
+    '.tr:hover { color: #e05555; }' +
+    '#btn-apply { display: none; margin-top: 12px; width: 100%; padding: 10px; background: linear-gradient(135deg, #5b6cf6, #7c3aed); color: #fff; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }' +
+    '#btn-apply:disabled { background: #bbb; cursor: not-allowed; }' +
+    '#status-msg { margin-top: 8px; font-size: 12px; text-align: center; min-height: 16px; }' +
+    '.no-cfg { font-size: 12px; color: #e05555; margin-top: 8px; text-align: center; }' +
+    '.msg-ok { color: #2d9e5f; } .msg-err { color: #e05555; } .msg-info { color: #5b6cf6; }' +
+    '</style></head><body>' +
+    '<div id="loading">Iniciando...</div>' +
+    '<div id="app" style="display:none"></div>' +
+    '<script>' +
+    'var CITIES_URL = "' + CITIES_URL + '";' +
+    'var WORKER_URL = "' + WORKER_URL + '";' +
+    'var FIELD_DESTINOS = "' + (fieldCfg.destinos||'') + '";' +
+    'var FIELD_PAIS = "' + (fieldCfg.pais||'') + '";' +
+    'var FIELD_REGION = "' + (fieldCfg.region||'') + '";' +
+    'var FIELD_DESTINOS = "' + (fieldCfg.destinos||'') + '";' +
+    'var FIELD_PAIS = "' + (fieldCfg.pais||'') + '";' +
+    'var FIELD_REGION = "' + (fieldCfg.region||'') + '";' +
+    'var DOMAIN = "' + domain + '";' +
+    'var allCities=[], selected=[], dropIndex=-1, ENTITY_ID="", PLACEMENT="' + placement + '";' +
+
+    'BX24.init(function() {' +
+    '  var info = BX24.placement.info();' +
+    '  PLACEMENT = info.placement || PLACEMENT;' +
+    '  ENTITY_ID = (info.options && info.options.ID) ? String(info.options.ID) : "";' +
+    '  if (!DOMAIN) DOMAIN = String(BX24.getDomain ? BX24.getDomain() : "");' +
+    '  document.getElementById("loading").style.display = "none";' +
+    '  document.getElementById("app").style.display = "block";' +
+    '  renderApp();' +
+    '});' +
+
+    'function renderApp() {' +
+    '  var app = document.getElementById("app");' +
+    '  var cfgOk = FIELD_DESTINOS && FIELD_PAIS && FIELD_REGION;' +
+    '  app.innerHTML =' +
+    '    "<div class=\\"sw\\"><input type=\\"text\\" id=\\"search-input\\" placeholder=\\"Escribe una ciudad...\\" autocomplete=\\"off\\" oninput=\\"onSearch(this.value)\\" onkeydown=\\"onKeyDown(event)\\">" +' +
+    '    "<div id=\\"dropdown\\"></div></div>" +' +
+    '    "<div id=\\"tags\\"></div>" +' +
+    '    "<button id=\\"btn-apply\\" onclick=\\"applyToDeal()\\">Guardar en Deal</button>" +' +
+    '    "<div id=\\"status-msg\\"></div>";' +
+    '  if (!cfgOk) {' +
+    '    app.innerHTML += "<div class=\\"no-cfg\\">Widget no configurado. Ve a Destinos Config en el menu izquierdo.</div>";' +
+    '  } else {' +
+    '    loadCities();' +
+    '    if (ENTITY_ID) loadExisting();' +
+    '  }' +
+    '}' +
+
+    'function loadCities() {' +
+    '  fetch(CITIES_URL).then(function(r){return r.json();})' +
+    '  .then(function(data){ allCities=data; })' +
+    '  .catch(function(){ setStatus("Error cargando ciudades.","err"); });' +
+    '}' +
+
+    'function loadExisting() {' +
+    '  if (!FIELD_DESTINOS || !ENTITY_ID) return;' +
+    '  var entity = PLACEMENT.indexOf("LEAD") >= 0 ? "crm.lead" : "crm.deal";' +
+    '  BX24.callMethod(entity + ".get", { id: ENTITY_ID }, function(r) {' +
+    '    if (r.error()) return;' +
+    '    var data = r.data();' +
+    '    var ciudadesArr = data[FIELD_DESTINOS] || [];' +
+    '    var paisesArr = data[FIELD_PAIS] || [];' +
+    '    var regionesArr = data[FIELD_REGION] || [];' +
+    '    if (!ciudadesArr.length) return;' +
+    '    selected = [];' +
+    '    for (var i=0;i<ciudadesArr.length;i++) {' +
+    '      if (ciudadesArr[i]) selected.push({ ciudad: ciudadesArr[i], pais: paisesArr[i]||"", region: regionesArr[i]||"" });' +
+    '    }' +
+    '    renderTags();' +
+    '    if (selected.length) document.getElementById("btn-apply").style.display = "block";' +
+    '  });' +
+    '}' +
+
+    'function onSearch(val) {' +
+    '  dropIndex=-1;' +
+    '  var q=val.trim().toLowerCase();' +
+    '  if (q.length<2) { closeDropdown(); return; }' +
+    '  var results=allCities.filter(function(c){return c.ciudad.toLowerCase().indexOf(q)===0;}).slice(0,50);' +
+    '  var dd=document.getElementById("dropdown");' +
+    '  if (!results.length) { dd.innerHTML="<div class=\\"de\\">Sin resultados</div>"; dd.style.display="block"; return; }' +
+    '  var h="";' +
+    '  for (var i=0;i<results.length;i++) {' +
+    '    var idx=allCities.indexOf(results[i]);' +
+    '    h+="<div class=\\"di\\" onmousedown=\\"pick("+idx+")\\">" +' +
+    '      "<div class=\\"dc\\">"+hl(results[i].ciudad,q)+"</div>" +' +
+    '      "<div class=\\"dm\\">"+results[i].pais+" · "+results[i].region+"</div></div>";' +
+    '  }' +
+    '  dd.innerHTML=h; dd.style.display="block";' +
+    '}' +
+
+    'function hl(city,q) {' +
+    '  var i=city.toLowerCase().indexOf(q.toLowerCase());' +
+    '  if (i<0) return city;' +
+    '  return city.slice(0,i)+"<strong>"+city.slice(i,i+q.length)+"</strong>"+city.slice(i+q.length);' +
+    '}' +
+
+    'function closeDropdown() { var dd=document.getElementById("dropdown"); if(dd) dd.style.display="none"; }' +
+
+    'function onKeyDown(e) {' +
+    '  var items=document.querySelectorAll(".di");' +
+    '  if (e.key==="ArrowDown") { dropIndex=Math.min(dropIndex+1,items.length-1); items.forEach(function(el,i){el.style.background=i===dropIndex?"#f0f2ff":"";});}' +
+    '  else if (e.key==="ArrowUp") { dropIndex=Math.max(dropIndex-1,0); items.forEach(function(el,i){el.style.background=i===dropIndex?"#f0f2ff":"";});}' +
+    '  else if (e.key==="Enter"&&dropIndex>=0) { items[dropIndex].dispatchEvent(new MouseEvent("mousedown")); }' +
+    '  else if (e.key==="Escape") { closeDropdown(); }' +
+    '}' +
+
+    'function pick(idx) {' +
+    '  var c=allCities[idx]; if (!c) return;' +
+    '  closeDropdown();' +
+    '  document.getElementById("search-input").value="";' +
+    '  if(selected.find(function(s){return s.ciudad===c.ciudad&&s.pais===c.pais;})) return;' +
+    '  selected.push({ciudad:c.ciudad,pais:c.pais,region:c.region});' +
+    '  renderTags();' +
+    '  document.getElementById("btn-apply").style.display="block";' +
+    '}' +
+
+    'function removeCity(i) {' +
+    '  selected.splice(i,1); renderTags();' +
+    '  if(!selected.length) document.getElementById("btn-apply").style.display="none";' +
+    '}' +
+
+    'function renderTags() {' +
+    '  var h="";' +
+    '  for(var i=0;i<selected.length;i++){' +
+    '    h+="<div class=\\"tag\\"><span>"+selected[i].ciudad+", "+selected[i].pais+"</span><span class=\\"tr\\" onclick=\\"removeCity("+i+")\\">×</span></div>";' +
+    '  }' +
+    '  document.getElementById("tags").innerHTML=h;' +
+    '}' +
+
+    'function applyToDeal() {' +
+    '  if(!selected.length||!ENTITY_ID||!FIELD_DESTINOS) return;' +
+    '  var btn=document.getElementById("btn-apply");' +
+    '  btn.disabled=true; btn.textContent="Guardando...";' +
+    '  var ciudades=[], paisesUniq=[], regionesUniq=[];' +
+    '  for(var i=0;i<selected.length;i++){' +
+    '    ciudades.push(selected[i].ciudad);' +
+    '    if(paisesUniq.indexOf(selected[i].pais)<0) paisesUniq.push(selected[i].pais);' +
+    '    if(regionesUniq.indexOf(selected[i].region)<0) regionesUniq.push(selected[i].region);' +
+    '  }' +
+    '  var entity=PLACEMENT.indexOf("LEAD")>=0?"crm.lead":"crm.deal";' +
+    '  var fields={};' +
+    '  fields[FIELD_DESTINOS]=ciudades;' +
+    '  fields[FIELD_PAIS]=paisesUniq;' +
+    '  fields[FIELD_REGION]=regionesUniq;' +
+    '  BX24.callMethod(entity+".update",{id:ENTITY_ID,fields:fields},function(result){' +
+    '    if(result.error()){' +
+    '      setStatus("Error: "+result.error(),"err");' +
+    '      btn.disabled=false; btn.textContent="Guardar en Deal";' +
+    '    } else {' +
+    '      setStatus("Guardado correctamente","ok");' +
+    '      btn.textContent="Guardado";' +
+    '      setTimeout(function(){btn.textContent="Guardar en Deal";btn.disabled=false;},2500);' +
+    '    }' +
+    '  });' +
+    '}' +
+
+    'function setStatus(msg,type){' +
+    '  var el=document.getElementById("status-msg");' +
+    '  if(!el) return;' +
+    '  el.textContent=msg;' +
+    '  el.className=type==="ok"?"msg-ok":type==="err"?"msg-err":"msg-info";' +
+    '}' +
+
+    'document.addEventListener("click",function(e){' +
+    '  if(!e.target.closest||!e.target.closest(".sw")) closeDropdown();' +
+    '});' +
+    '<\/script></body></html>';
+}
+
+// ── STATIC PAGES ─────────────────────────────────────────
+function renderInstallSuccess(tenant, domain) {
+  return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+    '<script src="//api.bitrix24.com/api/v1/"><\/script>' +
+    '<style>body{font-family:Arial,sans-serif;padding:30px;text-align:center}' +
+    '.ok{color:#2d9e5f;font-size:18px;font-weight:600;margin-bottom:8px}' +
+    'p{color:#666;font-size:13px;margin-top:6px}</style></head><body>' +
+    '<div class="ok">✓ Destinos instalado correctamente</div>' +
+    '<p>Portal: ' + domain + '</p>' +
+    '<p>Abre un Deal → pestaña Destinos</p>' +
+    '<p>Configura los campos en el menu izquierdo → Destinos Config</p>' +
+    '<script>BX24.init(function(){ setTimeout(function(){ BX24.closeApplication(); }, 4000); });<\/script>' +
+    '</body></html>';
+}
+
+function renderWelcomePage() {
+  return '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+    '<style>body{font-family:Arial,sans-serif;padding:40px;text-align:center;color:#333}' +
+    'h2{color:#5b6cf6}p{color:#888;font-size:13px;margin-top:8px}</style></head><body>' +
+    '<h2>🌍 Destinos / World Cities</h2>' +
+    '<p>Widget de busqueda de ciudades para Bitrix24</p>' +
+    '<p style="font-size:11px;margin-top:16px">by RIPUZ</p>' +
+    '</body></html>';
+}
